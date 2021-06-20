@@ -22,7 +22,7 @@ param(
 $Script:LOG_FILE_PATH = "$PSScriptRoot\CreateCredFile-Helper.log"
 
 # Script Version
-[int]$ScriptVersion = "1.3"
+[int]$ScriptVersion = "1.4"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
