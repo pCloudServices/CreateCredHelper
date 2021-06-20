@@ -22,7 +22,7 @@ param(
 $Script:LOG_FILE_PATH = "$PSScriptRoot\CreateCredFile-Helper.log"
 
 # Script Version
-[int]$ScriptVersion = "1.5"
+[int]$ScriptVersion = "1.2"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1436,7 +1436,7 @@ If(! $SkipVersionCheck)
 		If($isLatestVersion -eq $false)
 		{
             # Skip the version check so we don't get into a loop
-			$scriptPathAndArgs = "`& `"$ScriptFullPath`" -SkipVersionCheck"
+			$scriptPathAndArgs = "`& `"$PSScriptRoot\CreateCredFile-Helper.ps1`" -SkipVersionCheck"
 			Write-LogMessage -type Info -Msg "Finished Updating, relaunching the script"
 			# Run the updated script
 			Invoke-Expression $scriptPathAndArgs
