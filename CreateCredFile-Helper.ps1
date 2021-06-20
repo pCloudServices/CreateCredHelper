@@ -1418,7 +1418,7 @@ Function Get-UserandResetPassword{
 # Check latest version
 $gitHubLatestVersionParameters = @{
     currentVersion = $ScriptVersion;
-    repositoryName = "pCloudServices/ps";
+    repositoryName = "pCloudServices/CreateCredHelper";
     scriptVersionFileName = "CreateCredFile-Helper.ps1";
     sourceFolderPath = $PSScriptRoot;
     
