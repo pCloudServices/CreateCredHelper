@@ -796,7 +796,7 @@ Function Set-PVWAURL{
             if ($ComponentID -eq "PSM"){
                 [xml]$GetPVWAStringURL = Get-Content $ConfigPath
                 if(![string]::IsNullOrEmpty($GetPVWAStringURL) -and $GetPVWAStringURL.PasswordVaultConfiguration.General.ApplicationRoot){ 
-                    $PVWAurl = $GetPVWAStringURL.PasswordVaultConfiguration.General.ApplicationRoot
+                    $PVWAurl = ($GetPVWAStringURL.PasswordVaultConfiguration.General.ApplicationRoot).split(",")[0]
                     # Check that the PVWAUrl contains a URL and not IP
                     $foundConfig = ($PVWAurl -notmatch "\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
                 }
@@ -806,7 +806,8 @@ Function Set-PVWAURL{
             }
             if ($ComponentID -eq "CPM"){
                 try{
-                    $GetPVWAStringURL = (Get-Content $ConfigPath | Where-Object {$_ -match "Addresses" }).Split("=")[1]
+                    # Split the string by "=" to get PVWA and then by "," if multiple PVWAs defined, get the first one.
+                    $GetPVWAStringURL = (Get-Content $ConfigPath | Where-Object {$_ -match "Addresses" }).Split("=")[1].split(",")[0]
                 } catch {
                     Write-LogMessage -type Error -MSG "There was an error finding PVWA Address from CPM configuration file"
                     $GetPVWAStringURL = $null
