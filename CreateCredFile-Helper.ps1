@@ -866,6 +866,7 @@ Function Get-SystemHealth
 
     $WhereFilterText = ""
     # Check the component user
+
     If([string]::IsNullOrEmpty($componentUserDetails) -or $OfflineOnly)
     {
         # Set the filter to offline components from Component ID type
