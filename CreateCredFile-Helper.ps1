@@ -22,7 +22,7 @@ param(
 $Script:LOG_FILE_PATH = "$PSScriptRoot\CreateCredFile-Helper.log"
 
 # Script Version
-[int]$ScriptVersion = "1.2"
+$ScriptVersion = "1.3"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -796,7 +796,8 @@ Function Set-PVWAURL{
             if ($ComponentID -eq "PSM"){
                 [xml]$GetPVWAStringURL = Get-Content $ConfigPath
                 if(![string]::IsNullOrEmpty($GetPVWAStringURL) -and $GetPVWAStringURL.PasswordVaultConfiguration.General.ApplicationRoot){ 
-                    $PVWAurl = ($GetPVWAStringURL.PasswordVaultConfiguration.General.ApplicationRoot).split(",")[0]
+                    # In case there is more than one address, get the first one
+                    $PVWAurl = ($GetPVWAStringURL.PasswordVaultConfiguration.General.ApplicationRoot).Split(",")[0]
                     # Check that the PVWAUrl contains a URL and not IP
                     $foundConfig = ($PVWAurl -notmatch "\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
                 }
@@ -806,8 +807,8 @@ Function Set-PVWAURL{
             }
             if ($ComponentID -eq "CPM"){
                 try{
-                    # Split the string by "=" to get PVWA and then by "," if multiple PVWAs defined, get the first one.
-                    $GetPVWAStringURL = (Get-Content $ConfigPath | Where-Object {$_ -match "Addresses" }).Split("=")[1].split(",")[0]
+                    # In case there is more than one address, get the first one
+                    $GetPVWAStringURL = ((Get-Content $ConfigPath | Where-Object {$_ -match "Addresses" }).Split("=")[1]).Split(",")[0]
                 } catch {
                     Write-LogMessage -type Error -MSG "There was an error finding PVWA Address from CPM configuration file"
                     $GetPVWAStringURL = $null
@@ -857,12 +858,28 @@ Function Get-SystemHealth
         [string]$componentUserDetails,
         [string]$ComponentID
     )
-    Write-LogMessage -type Info -Msg "Checking SystemHealth Status for User $componentUserDetails" 
-    $URI = $URL_SystemHealthComponent+$ComponentID
+
+    $WhereFilterText = ""
+    # Check the component user
+    If([string]::IsNullOrEmpty($componentUserDetails))
+    {
+        # Set the filter to offline components from Component ID type
+        $WhereFilterText = '$_.IsLoggedOn -eq $false'
+        Write-LogMessage -type Info -Msg "Checking SystemHealth Status for all $ComponentID offline users" 
+    }
+    else {
+        # Set the filter to the specific component user name
+        $WhereFilterText = '$_.ComponentUserName -eq $componentUserDetails'
+        Write-LogMessage -type Info -Msg "Checking SystemHealth Status for User $componentUserDetails" 
+    }
+    # Handle specific use case of PSM ID
+    if($ComponentID -eq "PSM") { $URI = $URL_SystemHealthComponent+"SessionManagement" }
+    else { $URI = $URL_SystemHealthComponent+$ComponentID }
+    $WhereFilter = [scriptblock]::Create($WhereFilterText)
     Try{
         $GetSystemHealthResponse = Invoke-RestMethod -Method Get -Uri $URI -Headers $pvwaLogonHeader -ContentType "application/json" -TimeoutSec 4500
         if($null -ne $GetSystemHealthResponse){
-            foreach ($Component in $GetSystemHealthResponse.ComponentsDetails){
+            foreach ($Component in ($GetSystemHealthResponse.ComponentsDetails | Where-Object $WhereFilter)){
                 if ($Component.ComponentUserName -eq $componentUserDetails){
                     if ($Component.IsLoggedOn -eq $true){
                         Write-LogMessage -Type "Success" -Msg "$ComponentID = $componentUserDetails Is : Online!"
@@ -1256,8 +1273,13 @@ Function Get-CredFileUser
         [ValidateScript({Test-Path $_})]
         [string]$File
     )
-    $fileUserName = ((Get-Content $File | Select-Object -Index 2).split("=")[1]).Trim()
-    return $fileUserName
+    try{
+        $fileUserName = ((Get-Content $File | Select-Object -Index 2).split("=")[1]).Trim()
+        return $fileUserName
+    } catch {
+        Write-LogMessage -type Error -MSG "Could not find CredFile user name from file '$file'"
+        return $null
+    }
 }
 
 Function Test-SystemLogs
@@ -1303,12 +1325,14 @@ Function Invoke-GenerateCredFile
         [Parameter(Mandatory=$true)]
         [string]$FileName,
         [Parameter(Mandatory=$true)]
+        [string]$ComponentUser,
+        [Parameter(Mandatory=$true)]
         [securestring]$NewPassword
     )
     try{
         #Generate a new password with Complexity and we use it later for the Vault part
         $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($NewPassword) #Convert Password to BSTR
-        $script:GetComponentUserDetailsNewPW = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR) #Convert Password to Plaintext
+        $GetComponentUserDetailsNewPW = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR) #Convert Password to Plaintext
         Write-LogMessage -type Info -MSG "Generating CredFile: '$FileName'"
         #Generate Cred, Check if component is version 12 or lower and select the relevant cred file command
         If($ComponentVersion -gt 12)
@@ -1317,17 +1341,17 @@ Function Invoke-GenerateCredFile
             If($ComponentID -eq "CPM")
             {
                 # Run the CreateCredFile command
-                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $(Get-CredFileUser -File $FileName) /Password $GetComponentUserDetailsNewPW /AppType "CPM" /DPAPIMachineProtection /EntropyFile
+                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType "CPM" /DPAPIMachineProtection /EntropyFile
             }
             ElseIf($ComponentID -eq "PSM")
             {
                 # Run the CreateCredFile command
-                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $(Get-CredFileUser -File $FileName) /Password $GetComponentUserDetailsNewPW /AppType "PSMApp" /DPAPIMachineProtection /EntropyFile /ExePath $(Join-Path -Path $ComponentPath -ChildPath "CAPSM.exe")
+                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType "PSMApp" /DPAPIMachineProtection /EntropyFile /ExePath $(Join-Path -Path $ComponentPath -ChildPath "CAPSM.exe")
             }
         } Else {
             $appType = $ComponentID
             If($ComponentID -eq "PSM") { $appType = "PSMApp" }
-            & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $(Get-CredFileUser -File $FileName) /Password $GetComponentUserDetailsNewPW /AppType $appType
+            & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType $appType
         }
     } catch {
         Throw $(New-Object System.Exception ("Error generating CredFile for file '$FileName'.",$_.Exception))
@@ -1352,6 +1376,7 @@ Function Invoke-ResetCredFile
         {
             Stop-CYBRService -ServiceName $svc
         }
+        
         # Set all parameters for the Generate Cred File function
         $generateCredFileParameters = @{
             ComponentID = $Component.Name;
@@ -1361,9 +1386,14 @@ Function Invoke-ResetCredFile
         }
         Foreach($credFile in $Component.ComponentUser)
         {
-            Invoke-GenerateCredFile @generateCredFileParameters -FileName $credFile
+            $ComponentUser = $(Get-CredFileUser -File $credFile)
+            if([string]::IsNullOrEmpty($ComponentUser))
+            {
+                $ComponentUser = Read-Host "Enter the relevant user name for CredFile: '$credFile'"
+            }
+            Invoke-GenerateCredFile @generateCredFileParameters -FileName $credFile -ComponentUser $ComponentUser
             # Reset User pw in the vault and activate it
-            Get-UserandResetPassword -ComponentUser $(Get-CredFileUser -File $credFile) -NewPassword $generatedPassword
+            Get-UserandResetPassword -ComponentUser $ComponentUser -NewPassword $generatedPassword
         }
         # For cases where there is more than one service to start
         Foreach($svc in $Component.ServiceName)
@@ -1415,7 +1445,7 @@ Function Get-UserandResetPassword{
 
 # -----------------------------------
 # Script Begins Here
-
+Write-LogMessage -type Info -MSG "Starting Create CredFile helper script" -Header
 # Check latest version
 $gitHubLatestVersionParameters = @{
     currentVersion = $ScriptVersion;
@@ -1451,32 +1481,40 @@ If(! $SkipVersionCheck)
 
 If ($(Test-CurrentUserLocalAdmin) -eq $False)
 {
-	Write-LogMessage -Type Error -Msg "You must logged on as a local administrator in order to run this script"
+	Write-LogMessage -Type Error -Msg "You must be logged on as a local administrator in order to run this script"
     pause
 	return
 }
 
-#Create A Dynamic Menu based on the services found
-$detectedComponents = $(Find-Components)
-
 try{
-    # DEBUG
-    $detectedComponents.DisplayName
-    # Show the menu
-    $answer = Show-Menu -Items $detectedComponents.DisplayName
-    # Check the user chosen answer
-    If ($answer -eq "Q")
+    #Create A Dynamic Menu based on the services found
+    $detectedComponents = $(Find-Components)
+    If(($null -ne $detectedComponents) -and ($detectedComponents.Name.Count -gt 0))
     {
-        Write-Host "Exiting..." -ForegroundColor Gray
-        break
+        # DEBUG
+        #$detectedComponents.DisplayName
+        # Show the menu
+        $answer = Show-Menu -Items $detectedComponents.DisplayName
+        # Check the user chosen answer
+        If ($answer -eq "Q")
+        {
+            Write-Host "Exiting..." -ForegroundColor Gray
+            break
+        }
+        Else
+        {
+            $answer = [int]$answer #if answer is not a letter (Q) convert to int so we can use the below command
+            $typeChosen = $detectedComponents[$answer-1]
+            Invoke-ResetCredFile -Component $typeChosen
+            #Maybe in the future add AIM Here (ComponentID=AIM)
+        }
     }
-    Else
-    {
-        $answer = [int]$answer #if answer is not a letter (Q) convert to int so we can use the below command
-        $typeChosen = $detectedComponents[$answer-1]
-        Invoke-ResetCredFile -Component $typeChosen
-        #Maybe in the future add AIM Here (ComponentID=AIM)
+    else {
+        Write-LogMessage -Type Warning -MSG "There were no CyberArk components found on this mahcine"
     }
 } catch {
     Write-LogMessage -type Error -Msg "There was an error running the script. Error $(Join-ExceptionMessage $_.Exception)"
 }
+# Script ended
+Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
+return
