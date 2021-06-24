@@ -855,13 +855,18 @@ Function Set-PVWAURL{
 Function Get-SystemHealth
 {
     param(
+        # Component ID to return System Health on
+        [Parameter(Mandatory=$true)]
+        [string]$ComponentID,
+        [Parameter(Mandatory=$False)]
         [string]$componentUserDetails,
-        [string]$ComponentID
+        [Parameter(Mandatory=$false)]
+        [switch]$OfflineOnly
     )
 
     $WhereFilterText = ""
     # Check the component user
-    If([string]::IsNullOrEmpty($componentUserDetails))
+    If([string]::IsNullOrEmpty($componentUserDetails) -or $OfflineOnly)
     {
         # Set the filter to offline components from Component ID type
         $WhereFilterText = '$_.IsLoggedOn -eq $false'
@@ -878,9 +883,13 @@ Function Get-SystemHealth
     $WhereFilter = [scriptblock]::Create($WhereFilterText)
     Try{
         $GetSystemHealthResponse = Invoke-RestMethod -Method Get -Uri $URI -Headers $pvwaLogonHeader -ContentType "application/json" -TimeoutSec 4500
+        $offlineComponents = @()
         if($null -ne $GetSystemHealthResponse){
             foreach ($Component in ($GetSystemHealthResponse.ComponentsDetails | Where-Object $WhereFilter)){
-                if ($Component.ComponentUserName -eq $componentUserDetails){
+                if($OfflineOnly){
+                    $offlineComponents += $Component
+                }
+                elseif ($Component.ComponentUserName -eq $componentUserDetails){
                     if ($Component.IsLoggedOn -eq $true){
                         Write-LogMessage -Type "Success" -Msg "$ComponentID = $componentUserDetails Is : Online!"
                     } Else {
@@ -888,6 +897,11 @@ Function Get-SystemHealth
                     }
                 }
             }
+        }
+
+        if($OfflineOnly){
+            # Return all the offline components for further investigation
+            return $offlineComponents
         }
     } Catch{
         Throw $(New-Object System.Exception ("Cannot get '$componentUserDetails' status. Error: $($_.Exception.Response.StatusDescription)",$_.Exception))
@@ -1308,6 +1322,25 @@ Function Test-SystemLogs
 
     return $retResult
 }
+
+Function Find-UserInSystemLogs
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$User,
+        [Parameter(Mandatory=$true)]
+        [ValidateScript({ Test-Path $_ })]
+        [string]$LogPath
+    )
+    $retUser = $null
+
+    If(Get-Content -Path $LogPath | -Match $User){
+        $retUser = $Matches[0]
+    }
+    
+    return $retUser
+}
 #endregion
 
 #region Functions
@@ -1389,7 +1422,25 @@ Function Invoke-ResetCredFile
             $ComponentUser = $(Get-CredFileUser -File $credFile)
             if([string]::IsNullOrEmpty($ComponentUser))
             {
-                $ComponentUser = Read-Host "Enter the relevant user name for CredFile: '$credFile'"
+                # In case we did not find the Component User from the credFile - Look in other places
+                Write-LogMessage -Type Debug -MSG "Could not find Component User from CredFile, trying to look for all offline components"
+                # Look for all offline components
+                $offlineComponents = $(Get-SystemHealth -ComponentID $Component.Name -OfflineOnly)
+                # Compare offline components to the specific component logs
+                Foreach($user in $offlineComponents)
+                {
+                    $foundUser = $(Find-UserInSystemLogs -User $User -LogPath $Component.ServiceLog)
+                    If(! [string]::IsNullOrEmpty($foundUser)){
+                        Write-LogMessage -Type Debug -MSG "Found offline component user '$foundUser'"
+                        $ComponentUser = $foundUser
+                        Break
+                    }
+                }
+                If($offlineComponents.Count -eq 0)
+                {
+                    # We couldn't find any component User - ask the user to input the user name
+                    $ComponentUser = Read-Host "Enter the relevant user name for CredFile: '$credFile'"
+                }
             }
             Invoke-GenerateCredFile @generateCredFileParameters -FileName $credFile -ComponentUser $ComponentUser
             # Reset User pw in the vault and activate it
