@@ -639,14 +639,14 @@ Function Find-Components
 							$cpmPath = $componentPath.Replace("Scanner\CACPMScanner.exe","").Replace("PMEngine.exe","").Replace("/SERVICE","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $cpmPath -ChildPath "Vault\Vault.ini")
 							$fileVersion = Get-FileVersion "$cpmPath\PMEngine.exe"
-                            $ServiceLog = (Join-Path -Path $cpmPath -ChildPath "Logs\PMTrace.log")
+                            $ServiceLogs = @((Join-Path -Path $cpmPath -ChildPath "Logs\PMTrace.log"),(Join-Path -Path $cpmPath -ChildPath "Logs\CACPMScanner.log"))
                             $appFilePath = (Join-Path -Path $cpmPath -ChildPath "Vault\user.ini")
                             if (Test-Path $appFilePath){
                                 $ComponentUser = @($appFilePath)
                             }
 							$myObject = New-Object PSObject -Property @{Name="CPM";DisplayName="CyberArk Password Manager (CPM)";
                                                                         ServiceName=@($REGKEY_CPMSERVICE,$REGKEY_CPMScannerSERVICE);Path=$cpmPath;Version=$fileVersion;
-                                                                        ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLog=$ServiceLog}
+                                                                        ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLogs=$ServiceLogs}
                             $myObject | Add-Member -MemberType ScriptMethod -Name InitPVWAURL -Value { Set-PVWAURL -ComponentID $this.Name -ConfigPath $this.ConfigPath -AuthType $AuthType } | Out-Null
                             return $myObject
 						}
@@ -665,12 +665,12 @@ Function Find-Components
 							Write-LogMessage -Type "Info" -MSG "Found PVWA installation"
 							$pvwaPath = $componentPath.Replace("Services\CyberArkScheduledTasks.exe","").Replace('"',"").Trim()
 							$fileVersion = Get-FileVersion "$pvwaPath\Services\CyberArkScheduledTasks.exe"
-                            $ServiceLog = ""
+                            $ServiceLogs = @()
                             $ComponentUser = @()
                             $ConfigPath = ""
                             $myObject = New-Object PSObject -Property @{Name="PVWA";DisplayName="CyberArk Password Vault Web Application (PVWA)";
                                                                         ServiceName=$REGKEY_PVWASERVICE;Path=$pvwaPath;Version=$fileVersion;
-                                                                        ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLog=$ServiceLog}
+                                                                        ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLogs=$ServiceLogs}
                             $myObject | Add-Member -MemberType ScriptMethod -Name InitPVWAURL -Value { Set-PVWAURL -ComponentID $this.Name -ConfigPath $this.ConfigPath -AuthType $AuthType} | Out-Null
                             return $myObject
 						}
@@ -690,7 +690,7 @@ Function Find-Components
 							$PSMPath = $componentPath.Replace("CAPSM.exe","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $PSMPath -ChildPath "temp\PVConfiguration.xml")
 							$fileVersion = Get-FileVersion "$PSMPath\CAPSM.exe"
-                            $ServiceLog = (Join-Path -Path $PSMPath -ChildPath "Logs\PSMTrace.log")
+                            $ServiceLogs = @((Join-Path -Path $PSMPath -ChildPath "Logs\PSMTrace.log"))
                             $ComponentUser = @()
                             foreach($fileName in @("psmapp.cred","psmgw.cred"))
                             {
@@ -701,7 +701,7 @@ Function Find-Components
                             }
                             $myObject = New-Object PSObject -Property @{Name="PSM";DisplayName="CyberArk Privileged Session Manager (PSM)";
                                                                         ServiceName=$REGKEY_PSMSERVICE;Path=$PSMPath;Version=$fileVersion;
-                                                                        ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLog=$ServiceLog}
+                                                                        ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLogs=$ServiceLogs}
                             $myObject | Add-Member -MemberType ScriptMethod -Name InitPVWAURL -Value { Set-PVWAURL -ComponentID $this.Name -ConfigPath $this.ConfigPath -AuthType $AuthType} | Out-Null
                             return $myObject
 						}
@@ -722,10 +722,10 @@ Function Find-Components
 							$fileVersion = Get-FileVersion "$AIMPath\AppProvider.exe"
                             $ComponentUser = @()
                             $ConfigPath = ""
-                            $ServiceLog = ""
+                            $ServiceLogs = @()
                             $myObject = New-Object PSObject -Property @{Name="AIM";DisplayName="CyberArk Application Password Provider (AIM)";
                                                                         ServiceName=$REGKEY_AIMSERVICE;Path=$AIMPath;Version=$fileVersion;
-                                                                        ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLog=$ServiceLog}
+                                                                        ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLogs=$ServiceLogs}
                             $myObject | Add-Member -MemberType ScriptMethod -Name InitPVWAURL -Value { Set-PVWAURL -ComponentID $this.Name -ConfigPath $this.ConfigPath -AuthType $AuthType } | Out-Null
                             return $myObject
 						}
@@ -1331,13 +1331,22 @@ Function Find-UserInSystemLogs
         [Parameter(Mandatory=$true)]
         [string]$User,
         [Parameter(Mandatory=$true)]
-        [ValidateScript({ Test-Path $_ })]
-        [string]$LogPath
+        [string[]]$LogPaths
     )
     $retUser = $null
-
-    If(Get-Content -Path $LogPath | -Match $User){
-        $retUser = $Matches[0]
+    ForEach($log in $LogPaths)
+    {
+        If(Test-Path -Path $log)
+        {
+            If(Get-Content -Path $LogPath | -Match $User){
+                $retUser = $Matches[0]
+                break
+            }
+        }
+        Else
+        {
+            Write-LogMessage -type Warning -MSG "Could not find log file: '$log' - skipping"
+        }
     }
     
     return $retUser
@@ -1430,7 +1439,7 @@ Function Invoke-ResetCredFile
                 # Compare offline components to the specific component logs
                 Foreach($user in $offlineComponents)
                 {
-                    $foundUser = $(Find-UserInSystemLogs -User.ComponentUserName $User -LogPath $Component.ServiceLog)
+                    $foundUser = $(Find-UserInSystemLogs -User.ComponentUserName $User -LogPaths $Component.ServiceLogs)
                     If(! [string]::IsNullOrEmpty($foundUser)){
                         Write-LogMessage -Type Debug -MSG "Found offline component user '$foundUser'"
                         $ComponentUser = $foundUser
@@ -1440,7 +1449,7 @@ Function Invoke-ResetCredFile
                 If($offlineComponents.Count -eq 0)
                 {
                     # We couldn't find any component User - ask the user to input the user name
-                    $ComponentUser = Read-Host "Enter the relevant user name for CredFile: '$credFile'"
+                    $ComponentUser = $(Read-Host "Enter the relevant user name for CredFile: '$credFile'")
                 }
             }
             Invoke-GenerateCredFile @generateCredFileParameters -FileName $credFile -ComponentUser $ComponentUser
@@ -1453,10 +1462,13 @@ Function Invoke-ResetCredFile
             Start-CYBRService -ServiceName $svc
         }
         Get-SystemHealth -componentUserDetails $(Get-CredFileUser -File $Component.ComponentUser[0]) -ComponentID $Component.Name
-        Test-SystemLogs -ComponentID $Component.Name -LogPath $Component.ServiceLog | Out-Null
+        Foreach($serviceLog in $Component.ServiceLogs)
+        {
+            Test-SystemLogs -ComponentID $Component.Name -LogPath $serviceLog | Out-Null
+        }
         Invoke-Logoff
     } catch {
-        Throw $(New-Object System.Exception ("Error in the flow of Restting component $($Component.Name) credentials file.",$_.Exception))
+        Throw $(New-Object System.Exception ("Error in the flow of Resetting component $($Component.Name) credentials file.",$_.Exception))
     }
 }
 
@@ -1466,7 +1478,7 @@ Function Get-UserAndResetPassword{
         [Parameter(Mandatory=$true)]
         [string]$ComponentUser,
         [Parameter(Mandatory=$true)]
-        [securestring]$NewPassword
+        [SecureString]$NewPassword
     )
     try{
         $SearchComponentUserURL = $URL_Users+"?filter=componentUser&search=$ComponentUser"
