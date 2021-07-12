@@ -1338,7 +1338,7 @@ Function Find-UserInSystemLogs
     {
         If(Test-Path -Path $log)
         {
-            If(Get-Content -Path $LogPath | -Match $User){
+            If(Get-Content -Path $log | where {$_ -Match $User}){
                 $retUser = $Matches[0]
                 break
             }
@@ -1433,22 +1433,23 @@ Function Invoke-ResetCredFile
             if([string]::IsNullOrEmpty($ComponentUser))
             {
                 # In case we did not find the Component User from the credFile - Look in other places
-                Write-LogMessage -Type Debug -MSG "Could not find Component User from CredFile, trying to look for all offline components"
+                Write-LogMessage -Type Info -MSG "Could not find Component User from CredFile, trying to look for all offline components"
                 # Look for all offline components
                 $offlineComponents = $(Get-SystemHealth -ComponentID $Component.Name -OfflineOnly)
                 # Compare offline components to the specific component logs
                 Foreach($user in $offlineComponents)
                 {
-                    $foundUser = $(Find-UserInSystemLogs -User.ComponentUserName $User -LogPaths $Component.ServiceLogs)
+                    $foundUser = $(Find-UserInSystemLogs -User $User.ComponentUserName -LogPaths $Component.ServiceLogs)
                     If(! [string]::IsNullOrEmpty($foundUser)){
-                        Write-LogMessage -Type Debug -MSG "Found offline component user '$foundUser'"
+                        Write-LogMessage -Type Info -MSG "Found a match between an offline component user '$foundUser' and local logs, will use it to generate CredFile."
                         $ComponentUser = $foundUser
                         Break
                     }
                 }
-                If($offlineComponents.Count -eq 0)
+                If($offlineComponents.Count -eq 0 -or $ComponentUser -eq $null)
                 {
                     # We couldn't find any component User - ask the user to input the user name
+                    Write-LogMessage -Type Info -MSG "Couldn't match offline component user in SystemHealth in local Logs, will have to input manually."
                     $ComponentUser = $(Read-Host "Enter the relevant user name for CredFile: '$credFile'")
                 }
             }
@@ -1462,10 +1463,7 @@ Function Invoke-ResetCredFile
             Start-CYBRService -ServiceName $svc
         }
         Get-SystemHealth -componentUserDetails $(Get-CredFileUser -File $Component.ComponentUser[0]) -ComponentID $Component.Name
-        Foreach($serviceLog in $Component.ServiceLogs)
-        {
-            Test-SystemLogs -ComponentID $Component.Name -LogPath $serviceLog | Out-Null
-        }
+        Test-SystemLogs -ComponentID $Component.Name -LogPath $Component.serviceLogs[0] | Out-Null
         Invoke-Logoff
     } catch {
         Throw $(New-Object System.Exception ("Error in the flow of Resetting component $($Component.Name) credentials file.",$_.Exception))
