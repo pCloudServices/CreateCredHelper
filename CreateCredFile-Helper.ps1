@@ -292,7 +292,7 @@ Function Copy-GitHubContent
 .DESCRIPTION
 	Copies all file and folder structure from a specified GitHub repository folder
     Will create the content from a GitHub URL in the output folder
-    Can handle files and folders recursevely
+    Can handle files and folders recursively
 .PARAMETER outputFolderPath
     The folder path to create the files and folders in
 .PARAMETER gitHubItemURL
@@ -352,18 +352,18 @@ Function Replace-Item
             if(Test-Path -Path $(Join-Path -path $destPath -ChildPath $item.name))
             {
                 Rename-Item -Path $(Join-Path -path $destPath -ChildPath $item.name) -NewName $oldName
-                Copy-Item -path $item.fullname -Destination $(Join-Path -path $destPath -ChildPath $item.name)
+                Copy-Item -path $item.FullName -Destination $(Join-Path -path $destPath -ChildPath $item.name)
                 Remove-Item -path $(Join-Path -path $destPath -ChildPath $oldName)
             }
             Else
 			{
 				Write-Error "Can't find file $($item.name) in destination location '$destPath' to replace, copying"
-                Copy-Item -path $item.fullname -Destination $destPath
+                Copy-Item -path $item.FullName -Destination $destPath
 			}
         }
     }
     catch{
-        Throw $(New-Object System.Exception ("eplace-Item: Couldn't Replace files",$_.Exception))
+        Throw $(New-Object System.Exception ("Replace-Item: Couldn't Replace files",$_.Exception))
     }
 
 }
@@ -784,7 +784,7 @@ Function Set-PVWAURL{
         [string]$AuthType = "cyberark"
     )
     Try{
-        $foundConfig = $flase
+        $foundConfig = $false
         Write-LogMessage -type debug -Msg "Get PVWA URL from component '$ComponentID' and from config file '$ConfigPath'"
         if($ComponentID -eq "PVWA")
         {
@@ -799,7 +799,7 @@ Function Set-PVWAURL{
                     # In case there is more than one address, get the first one
                     $PVWAurl = ($GetPVWAStringURL.PasswordVaultConfiguration.General.ApplicationRoot).Split(",")[0]
                     # Check that the PVWAUrl contains a URL and not IP
-                    $foundConfig = ($PVWAurl -notmatch "\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
+                    $foundConfig = ($PVWAurl -NotMatch "\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
                 }
                 else {
                     Write-LogMessage -type Warning -Msg "Error reading the configuration file"
@@ -1013,7 +1013,7 @@ Function Test-CurrentUserLocalAdmin
 # Name...........: New-RandomPassword
 # Description....: Creates a new random password
 # Parameters.....: Length, (Switch)Lowercase, (Switch)Uppercase, (Switch)Numbers, (Switch)Symbols
-# Return Values..: A random password bsaed on the requirements
+# Return Values..: A random password based on the requirements
 # =================================================================================================================================
 Function New-RandomPassword{
     [CmdletBinding()]
@@ -1090,9 +1090,9 @@ Function New-RandomPassword{
 
         <#
         .SYNOPSIS
-            Test string for existnce specified character.
+            Test string for existence specified character.
         .DESCRIPTION
-            examins each character of a string to determine if it contains a specificed characters
+            examine each character of a string to determine if it contains a specified characters
         .EXAMPLE
             Test-StringContents in string
         #>
@@ -1430,7 +1430,7 @@ Function Invoke-ResetCredFile
                 # Compare offline components to the specific component logs
                 Foreach($user in $offlineComponents)
                 {
-                    $foundUser = $(Find-UserInSystemLogs -User $User -LogPath $Component.ServiceLog)
+                    $foundUser = $(Find-UserInSystemLogs -User.ComponentUserName $User -LogPath $Component.ServiceLog)
                     If(! [string]::IsNullOrEmpty($foundUser)){
                         Write-LogMessage -Type Debug -MSG "Found offline component user '$foundUser'"
                         $ComponentUser = $foundUser
@@ -1445,7 +1445,7 @@ Function Invoke-ResetCredFile
             }
             Invoke-GenerateCredFile @generateCredFileParameters -FileName $credFile -ComponentUser $ComponentUser
             # Reset User pw in the vault and activate it
-            Get-UserandResetPassword -ComponentUser $ComponentUser -NewPassword $generatedPassword
+            Get-UserAndResetPassword -ComponentUser $ComponentUser -NewPassword $generatedPassword
         }
         # For cases where there is more than one service to start
         Foreach($svc in $Component.ServiceName)
@@ -1460,7 +1460,7 @@ Function Invoke-ResetCredFile
     }
 }
 
-Function Get-UserandResetPassword{
+Function Get-UserAndResetPassword{
     [CmdletBinding()]
     param (
         [Parameter(Mandatory=$true)]
@@ -1562,7 +1562,7 @@ try{
         }
     }
     else {
-        Write-LogMessage -Type Warning -MSG "There were no CyberArk components found on this mahcine"
+        Write-LogMessage -Type Warning -MSG "There were no CyberArk components found on this machine"
     }
 } catch {
     Write-LogMessage -type Error -Msg "There was an error running the script. Error $(Join-ExceptionMessage $_.Exception)"
