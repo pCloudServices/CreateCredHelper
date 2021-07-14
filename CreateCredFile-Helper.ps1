@@ -1342,7 +1342,6 @@ Function Find-UserInSystemLogs
     $retUser = $null
     ForEach($log in $LogPaths)
     {
-    Write-Host $Log
         If(Test-Path -Path $log)
         {
             If(Get-Content -Path $log | where {$_ -Match $User}){
