@@ -643,6 +643,8 @@ Function Find-Components
                             $serviceLogsOldConsole = @(Join-Path -Path $cpmPath -ChildPath "Logs\old\PMConsole.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $ServiceLogsMain = @((Join-Path -Path $cpmPath -ChildPath "Logs\PMTrace.log"),(Join-Path -Path $cpmPath -ChildPath "Logs\CACPMScanner.log"))
                             $serviceLogs = $ServiceLogsMain + $serviceLogsOldTrace + $serviceLogsOldConsole
+                            #Create New Fresh Cred File, it will not overwrite an existing one, this is just incase there was no cred to begin with.
+                            New-Item (Join-Path -Path $cpmPath -ChildPath "Vault\user.ini") -ErrorAction SilentlyContinue | Get-Acl | Set-Acl (Join-Path -Path $cpmPath -ChildPath "Vault\Vault.ini")
                             $appFilePath = (Join-Path -Path $cpmPath -ChildPath "Vault\user.ini")
                             if (Test-Path $appFilePath){
                                 $ComponentUser = @($appFilePath)
@@ -698,6 +700,11 @@ Function Find-Components
                             $ServiceLogsMain = @(Join-Path -Path $PSMPath -ChildPath "Logs\PSMTrace.log")
                             $ServiceLogs = $ServiceLogsMain + $serviceLogsOldTrace + $serviceLogsOldConsole
                             $ComponentUser = @()
+                            #Create New Fresh Cred File, it will not overwrite an existing one, this is just incase there was no cred to begin with.
+                            foreach($cleanCredFile in @("psmapp.cred","psmgw.cred"))
+                            {
+                            New-Item (Join-Path -Path $PSMPath -ChildPath "Vault\$cleanCredFile") -ErrorAction SilentlyContinue | Get-Acl | Set-Acl (Join-Path -Path $PSMPath -ChildPath "Vault\Vault.ini")
+                            }
                             foreach($fileName in @("psmapp.cred","psmgw.cred"))
                             {
                                 $appFilePath = (Join-Path -Path $PSMPath -ChildPath "Vault\$fileName")
@@ -1259,7 +1266,7 @@ Function Show-Menu
         [string[]]$Items
     )
     # Write the menu
-    Clear-Host
+    #Clear-Host
     Write-Host "================ ResetCredFile Guide ================"
     Write-Host ""
     Write-Host "Displaying Only Detected CyberArk Services:"
