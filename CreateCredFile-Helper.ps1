@@ -22,7 +22,7 @@ param(
 $Script:LOG_FILE_PATH = "$PSScriptRoot\CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "1.3"
+$ScriptVersion = "1.4"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -639,7 +639,9 @@ Function Find-Components
 							$cpmPath = $componentPath.Replace("Scanner\CACPMScanner.exe","").Replace("PMEngine.exe","").Replace("/SERVICE","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $cpmPath -ChildPath "Vault\Vault.ini")
 							$fileVersion = Get-FileVersion "$cpmPath\PMEngine.exe"
-                            $ServiceLogs = @((Join-Path -Path $cpmPath -ChildPath "Logs\PMTrace.log"),(Join-Path -Path $cpmPath -ChildPath "Logs\CACPMScanner.log"))
+                            $serviceLogsOld = @(Join-Path -Path $cpmPath -ChildPath "Logs\old\PMTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 5)
+                            $ServiceLogsMain = @((Join-Path -Path $cpmPath -ChildPath "Logs\PMTrace.log"),(Join-Path -Path $cpmPath -ChildPath "Logs\CACPMScanner.log"))
+                            $serviceLogs = $ServiceLogsMain + $serviceLogsOld
                             $appFilePath = (Join-Path -Path $cpmPath -ChildPath "Vault\user.ini")
                             if (Test-Path $appFilePath){
                                 $ComponentUser = @($appFilePath)
@@ -690,7 +692,9 @@ Function Find-Components
 							$PSMPath = $componentPath.Replace("CAPSM.exe","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $PSMPath -ChildPath "temp\PVConfiguration.xml")
 							$fileVersion = Get-FileVersion "$PSMPath\CAPSM.exe"
-                            $ServiceLogs = @((Join-Path -Path $PSMPath -ChildPath "Logs\PSMTrace.log"))
+                            $serviceLogsOld = @(Join-Path -Path $PSMPath -ChildPath "Logs\old\PSMTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 5)
+                            $ServiceLogsMain = @(Join-Path -Path $PSMPath -ChildPath "Logs\PSMTrace.log")
+                            $ServiceLogs = $ServiceLogsMain + $serviceLogsOld
                             $ComponentUser = @()
                             foreach($fileName in @("psmapp.cred","psmgw.cred"))
                             {
@@ -1427,8 +1431,10 @@ Function Invoke-ResetCredFile
             ComponentPath = $Component.Path;        
             NewPassword = $generatedPassword
         }
+        #Run through each existing cred File (For CPM: User.ini, for PSM: psmapp.cred, psmgw.cred) and generate cred using $ComponentUser
         Foreach($credFile in $Component.ComponentUser)
         {
+            #Pull the User from the cred file
             $ComponentUser = $(Get-CredFileUser -File $credFile)
             if([string]::IsNullOrEmpty($ComponentUser))
             {
@@ -1443,6 +1449,10 @@ Function Invoke-ResetCredFile
                     If(! [string]::IsNullOrEmpty($foundUser)){
                         Write-LogMessage -Type Info -MSG "Found a match between an offline component user '$foundUser' and local logs, will use it to generate CredFile."
                         $ComponentUser = $foundUser
+                        #If the $CredFile is psmgw.cred then we split the SystemHealth PSM App user into 2 strings and replace "PSMApp_blabla" with "PSMgw_blabla" so we also reset the gw cred.
+                            If ($credFile -like "*psmgw.cred*"){
+                            $ComponentUser = "PSMGw_"+$foundUser.split("_")[1]
+                            }
                         Break
                     }
                 }
