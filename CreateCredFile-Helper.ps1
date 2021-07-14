@@ -639,9 +639,10 @@ Function Find-Components
 							$cpmPath = $componentPath.Replace("Scanner\CACPMScanner.exe","").Replace("PMEngine.exe","").Replace("/SERVICE","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $cpmPath -ChildPath "Vault\Vault.ini")
 							$fileVersion = Get-FileVersion "$cpmPath\PMEngine.exe"
-                            $serviceLogsOld = @(Join-Path -Path $cpmPath -ChildPath "Logs\old\PMTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 5)
+                            $serviceLogsOldTrace = @(Join-Path -Path $cpmPath -ChildPath "Logs\old\PMTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
+                            $serviceLogsOldConsole = @(Join-Path -Path $cpmPath -ChildPath "Logs\old\PMConsole.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $ServiceLogsMain = @((Join-Path -Path $cpmPath -ChildPath "Logs\PMTrace.log"),(Join-Path -Path $cpmPath -ChildPath "Logs\CACPMScanner.log"))
-                            $serviceLogs = $ServiceLogsMain + $serviceLogsOld
+                            $serviceLogs = $ServiceLogsMain + $serviceLogsOldTrace + $serviceLogsOldConsole
                             $appFilePath = (Join-Path -Path $cpmPath -ChildPath "Vault\user.ini")
                             if (Test-Path $appFilePath){
                                 $ComponentUser = @($appFilePath)
@@ -692,9 +693,10 @@ Function Find-Components
 							$PSMPath = $componentPath.Replace("CAPSM.exe","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $PSMPath -ChildPath "temp\PVConfiguration.xml")
 							$fileVersion = Get-FileVersion "$PSMPath\CAPSM.exe"
-                            $serviceLogsOld = @(Join-Path -Path $PSMPath -ChildPath "Logs\old\PSMTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 5)
+                            $serviceLogsOldTrace = @(Join-Path -Path $PSMPath -ChildPath "Logs\old\PSMTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
+                            $serviceLogsOldConsole = @(Join-Path -Path $PSMPath -ChildPath "Logs\old\PSMConsole.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $ServiceLogsMain = @(Join-Path -Path $PSMPath -ChildPath "Logs\PSMTrace.log")
-                            $ServiceLogs = $ServiceLogsMain + $serviceLogsOld
+                            $ServiceLogs = $ServiceLogsMain + $serviceLogsOldTrace + $serviceLogsOldConsole
                             $ComponentUser = @()
                             foreach($fileName in @("psmapp.cred","psmgw.cred"))
                             {
@@ -1340,6 +1342,7 @@ Function Find-UserInSystemLogs
     $retUser = $null
     ForEach($log in $LogPaths)
     {
+    Write-Host $Log
         If(Test-Path -Path $log)
         {
             If(Get-Content -Path $log | where {$_ -Match $User}){
