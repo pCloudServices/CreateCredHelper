@@ -1,8 +1,8 @@
 ###########################################################################
 #
-# NAME: Reset Cred File Wrapper
+# NAME: Reset Cred File Helper
 #
-# AUTHOR:  Mike Brook<mike.brook@cyberark.com>
+# AUTHOR:  Mike Brook<mike.brook@cyberark.com>, Assaf Miron<assaf.miron@cyberark.com>
 #
 # COMMENT: 
 # Script will attempt to regenerate the local Applicative Cred File and Sync it in the Vault.
