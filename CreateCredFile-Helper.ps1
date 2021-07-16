@@ -22,7 +22,7 @@ param(
 $Script:LOG_FILE_PATH = "$PSScriptRoot\CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "1.4"
+$ScriptVersion = "1.5"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1181,10 +1181,13 @@ Function Stop-CYBRService
         $CAStopping = "StopPending"
         $CAStop = "Stop"
         Write-LogMessage -type Info -Msg "Stopping '$ServiceName' Service..."
-        $Service = Get-Service $ServiceName
-        $Service | Stop-Service
-        $Service.WaitForStatus($CAStopped,'00:00:08')
-        $ServiceStatus = Get-Service -Name $Service.Name | Select-Object -ExpandProperty status
+        #get process ID
+        $Service = (Get-WmiObject win32_service | where {$_.name -eq $ServiceName} -ErrorAction SilentlyContinue).ProcessID
+        #kill the process
+        Stop-Process $Service -Force | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+        #stop service, this makes sure the next status command receives a proper status as kill command is very abrupt.
+        Get-Service $ServiceName | Stop-Service -Force -ErrorAction SilentlyContinue
+        $ServiceStatus = Get-Service -Name $ServiceName | Select-Object -ExpandProperty status
         if($ServiceStatus -eq $CAStopped){
             Write-LogMessage -type success -Msg "Successfully $CAStopped Service: $($service.name)."
         }
@@ -1209,8 +1212,8 @@ Function Start-CYBRService
         $CAStart = "Start"
         $CARunning = "Running"
         $Service = Get-Service $ServiceName
-        $Service | Start-Service
-        $Service.WaitForStatus($CARunning,'00:00:08')
+        $Service | Start-Service -ErrorAction SilentlyContinue
+        $service.refresh()
         $ServiceStatus = Get-Service -Name $Service.Name | Select-Object -ExpandProperty status
         if($ServiceStatus -eq $CARunning){
             Write-LogMessage -type success -Msg "Successfully $CAStarted Service: $($service.name)."
