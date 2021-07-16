@@ -1212,7 +1212,8 @@ Function Start-CYBRService
         $CAStart = "Start"
         $CARunning = "Running"
         $Service = Get-Service $ServiceName
-        $Service | Start-Service -ErrorAction SilentlyContinue
+        $service.Start()
+        $Service.WaitForStatus($CARunning,'00:00:20')
         $service.refresh()
         $ServiceStatus = Get-Service -Name $Service.Name | Select-Object -ExpandProperty status
         if($ServiceStatus -eq $CARunning){
@@ -1222,7 +1223,7 @@ Function Start-CYBRService
             Write-LogMessage -type Warning -Msg "Couldn't $CAStart Service: $($service.name) Do it Manually."
         }
     } catch {
-        Throw $(New-Object System.Exception ("Error starting the service '$ServiceName'.",$_.Exception))
+        Throw $(New-Object System.Exception ("Error starting the service '$ServiceName'. Check Service Status and start it Manually."))
     }
 }
 
