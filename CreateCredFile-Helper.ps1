@@ -19,10 +19,10 @@ param(
     $SkipVersionCheck
 )
 
-$Script:LOG_FILE_PATH = "$PSScriptRoot\CreateCredFile-Helper.log"
+$Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "1.5"
+$ScriptVersion = "1.6"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1401,12 +1401,12 @@ Function Invoke-GenerateCredFile
             If($ComponentID -eq "CPM")
             {
                 # Run the CreateCredFile command
-                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType "CPM" /DPAPIMachineProtection /EntropyFile
+                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType "CPM" /DPAPIMachineProtection /EntropyFile /Hostname /IpAddress
             }
             ElseIf($ComponentID -eq "PSM")
             {
                 # Run the CreateCredFile command
-                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType "PSMApp" /DPAPIMachineProtection /EntropyFile /ExePath $(Join-Path -Path $ComponentPath -ChildPath "CAPSM.exe")
+                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType "PSMApp" /DPAPIMachineProtection /EntropyFile /ExePath $(Join-Path -Path $ComponentPath -ChildPath "CAPSM.exe") /Hostname /IpAddress
             }
         } Else {
             $appType = $ComponentID
