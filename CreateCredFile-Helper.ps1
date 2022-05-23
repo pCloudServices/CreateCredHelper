@@ -23,7 +23,7 @@ $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "2.0"
+$ScriptVersion = "2.1"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -490,6 +490,84 @@ param (
 	}
 	
 	return $retLatestVersion
+}
+
+# @FUNCTION@ ======================================================================================================================
+# Name...........: Get-Choice
+# Description....: Prompts user for Selection choice
+# Parameters.....: None
+# Return Values..: 
+# =================================================================================================================================
+Function Get-Choice{
+    [CmdletBinding()]
+    Param
+    (
+        [Parameter(Mandatory = $true, Position = 0)]
+        $Title,
+
+        [Parameter(Mandatory = $true, Position = 1)]
+        [String[]]
+        $Options,
+
+        [Parameter(Position = 2)]
+        $DefaultChoice = -1
+    )
+    if ($DefaultChoice -ne -1 -and ($DefaultChoice -gt $Options.Count -or $DefaultChoice -lt 1))
+    {
+        Write-Warning "DefaultChoice needs to be a value between 1 and $($Options.Count) or -1 (for none)"
+        exit
+    }
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+    $script:result = ""
+    $form = New-Object System.Windows.Forms.Form
+    $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.BackColor = [Drawing.Color]::White
+    $form.TopMost = $True
+    $form.Text = $Title
+    $form.ControlBox = $False
+    $form.StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
+    #calculate width required based on longest option text and form title
+    $minFormWidth = 300
+    $formHeight = 44
+    $minButtonWidth = 150
+    $buttonHeight = 23
+    $buttonY = 12
+    $spacing = 10
+    $buttonWidth = [Windows.Forms.TextRenderer]::MeasureText((($Options | Sort-Object Length)[-1]), $form.Font).Width + 1
+    $buttonWidth = [Math]::Max($minButtonWidth, $buttonWidth)
+    $formWidth = [Windows.Forms.TextRenderer]::MeasureText($Title, $form.Font).Width
+    $spaceWidth = ($options.Count + 1) * $spacing
+    $formWidth = ($formWidth, $minFormWidth, ($buttonWidth * $Options.Count + $spaceWidth) | Measure-Object -Maximum).Maximum
+    $form.ClientSize = New-Object System.Drawing.Size($formWidth, $formHeight)
+    $index = 0
+    #create the buttons dynamically based on the options
+    foreach ($option in $Options)
+    {
+        Set-Variable "button$index" -Value (New-Object System.Windows.Forms.Button)
+        $temp = Get-Variable "button$index" -ValueOnly
+        $temp.Size = New-Object System.Drawing.Size($buttonWidth, $buttonHeight)
+        $temp.UseVisualStyleBackColor = $True
+        $temp.Text = $option
+        $buttonX = ($index + 1) * $spacing + $index * $buttonWidth
+        $temp.Add_Click({ 
+                $script:result = $this.Text; 
+                $form.Close() 
+            })
+        $temp.Location = New-Object System.Drawing.Point($buttonX, $buttonY)
+        $form.Controls.Add($temp)
+        $index++
+    }
+    $shownString = '$this.Activate();'
+    if ($DefaultChoice -ne -1)
+    {
+        $shownString += '(Get-Variable "button$($DefaultChoice-1)" -ValueOnly).Focus()'
+    }
+    $shownSB = [ScriptBlock]::Create($shownString)
+    $form.Add_Shown($shownSB)
+    [void]$form.ShowDialog()
+    return $result
 }
 #endregion
 
@@ -1572,22 +1650,44 @@ $ApiLogs = "$pathApiKey`Vault\Logs\ApiKeyManager.log"
 #Purge logs before execution
 Remove-Item $ApiLogs -Force -ErrorAction SilentlyContinue
 
- Write-LogMessage -type Info -MSG "Resetting CPM Scanner ApiKey, this can take a few secs..."
+Write-LogMessage -type Info -MSG "Resetting CPM Scanner ApiKey, this can take a few secs..."
+Write-LogMessage -type Info -MSG "Testing if SendWait function will work..."
+$dummyString = "Test"
+$teststring = $null
+#Escape special chars that have other meaning in SendKeys class.
+[string]$simplePw = ($creds.GetNetworkCredential().password)
+$simplePw = $simplePw.Replace("+","{+}").Replace("~","{~}").Replace("^","{^}").Replace("(","{(}").Replace(")","{)}")
+
+#we need to test this command since some endpoint agents are blocking it, if its blocked, user will have to enter admin pw manually.
+[System.Windows.Forms.SendKeys]::SendWait($dummyString);
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}');
 $wshell.AppActivate('Privilege Cloud CreateCredFile-Helper') | Out-Null
-[System.Windows.Forms.SendKeys]::SendWait(($creds.GetNetworkCredential().password))
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+$teststring = Read-Host -Prompt "Testing SendWait command: "
+#if test string contains value, SendWait works
+if($teststring){
+    $wshell.AppActivate('Privilege Cloud CreateCredFile-Helper') | Out-Null
+    [System.Windows.Forms.SendKeys]::SendWait($simplePw)
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    & "$pathApikey\Vault\ApiKeyManager.exe" revoke -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
+    Start-Sleep 1
+    $wshell.AppActivate('Privilege Cloud CreateCredFile-Helper') | Out-Null
+    [System.Windows.Forms.SendKeys]::SendWait($simplePw)
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    & "$pathApikey\Vault\ApiKeyManager.exe" add -f "$pathApikey`Vault\apikey.ini" -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
+}
+Else{
+Write-LogMessage -type Warning -Msg "Error Powershell's SendWait command doesn't work, probably because you have Endpoint agent blocking this action."
+Write-LogMessage -type Warning -Msg "You will have to input your administrative account manually (the same account pw you input at the start of the script)."
 & "$pathApikey\Vault\ApiKeyManager.exe" revoke -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
-Start-Sleep 1
-$wshell.AppActivate('Privilege Cloud CreateCredFile-Helper') | Out-Null
-[System.Windows.Forms.SendKeys]::SendWait(($creds.GetNetworkCredential().password))
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 & "$pathApikey\Vault\ApiKeyManager.exe" add -f "$pathApikey`Vault\apikey.ini" -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
+}
 
 if(gc $ApiLogs | Select-String "ERROR"){
 Write-LogMessage -type Warning -MSG "Couldn't reset API key, check for errors in logfile: $ApiLogs"
 }
 
 $creds = $null
+$simplePw = $null
 }
 
 # -----------------------------------
@@ -1642,8 +1742,6 @@ try{
     $detectedComponents = $(Find-Components)
     If(($null -ne $detectedComponents) -and ($detectedComponents.Name.Count -gt 0))
     {
-        # DEBUG
-        #$detectedComponents.DisplayName
         # Show the menu
         $answer = Show-Menu -Items $detectedComponents.DisplayName
         # Check the user chosen answer
@@ -1658,7 +1756,14 @@ try{
             $typeChosen = $detectedComponents[$answer-1]
             Invoke-ResetCredFile -Component $typeChosen
             if($typeChosen.Name -eq "CPM"){
-            Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $creds.UserName
+               $decisionAPIKey = Get-Choice -Title "Would you like to also reset CPM Scanner APIKey?" -Options "Yes (Recommended)", "No" -DefaultChoice 1
+               if($decisionAPIKey -eq "No")
+               {
+                     Write-LogMessage -Type info -MSG "Selected not to run CPM Scanner APIKey reset."
+               }
+               Else{
+                    Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $creds.UserName
+                   }
             }
             #Maybe in the future add AIM Here (ComponentID=AIM)
         }
@@ -1673,10 +1778,10 @@ try{
 Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
 # SIG # Begin signature block
-# MIIgTgYJKoZIhvcNAQcCoIIgPzCCIDsCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIgTQYJKoZIhvcNAQcCoIIgPjCCIDoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBZKWnf4/WLdXSa
-# w6FOg8YHt/chjTF0l43zfnIx/6iSVKCCDl8wggboMIIE0KADAgECAhB3vQ4Ft1kL
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCD0qliZsklzUQDz
+# ppBkeqHsQ8FldPnvBA6FPUBlRlNrhaCCDl8wggboMIIE0KADAgECAhB3vQ4Ft1kL
 # th1HYVMeP3XtMA0GCSqGSIb3DQEBCwUAMFMxCzAJBgNVBAYTAkJFMRkwFwYDVQQK
 # ExBHbG9iYWxTaWduIG52LXNhMSkwJwYDVQQDEyBHbG9iYWxTaWduIENvZGUgU2ln
 # bmluZyBSb290IFI0NTAeFw0yMDA3MjgwMDAwMDBaFw0zMDA3MjgwMDAwMDBaMFwx
@@ -1753,97 +1858,97 @@ return
 # l418MFn4EPQUqxB51SMihIcyqu6+3qOlco8Dsy1y0gC0Hcx+unDZPsN8k+rhueN2
 # HXrPkAJ2bsEJd7adPy423FKbA7bRCOc6dWOFH1OGANfEG0Rjw9RfcsI84OkKpQ7R
 # XldpKIcWuaYMlfYzsl+P8dJru+KgA8Vh7GTVb5USzFGeMyOMtyr1/L2bIyRVSiLL
-# 8goMl4DTDOWeMYIRRTCCEUECAQEwbDBcMQswCQYDVQQGEwJCRTEZMBcGA1UEChMQ
+# 8goMl4DTDOWeMYIRRDCCEUACAQEwbDBcMQswCQYDVQQGEwJCRTEZMBcGA1UEChMQ
 # R2xvYmFsU2lnbiBudi1zYTEyMDAGA1UEAxMpR2xvYmFsU2lnbiBHQ0MgUjQ1IEVW
 # IENvZGVTaWduaW5nIENBIDIwMjACDHBNxPwWOpXgXVV8DDANBglghkgBZQMEAgEF
 # AKB8MBAGCisGAQQBgjcCAQwxAjAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEE
-# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDG
-# fttmvcQff8qm0LITeKuQBEG8CdoeZtp3N0Kr/jhRXDANBgkqhkiG9w0BAQEFAASC
-# AgCxATYTedXLoxSRX3FOHsHfP73pe8hMI0ydq0ojw+tEMaYnKqcSOllVSvdaRzF8
-# Eqxnhw9p7MCXC5z/mOxvIZAy6JP0C1MvMO5NXxIDcmU/8UVmU5vimRQ8pmG6GviV
-# 9kVyqAdtTLoX35JrrKqaSoMnv7zHRSBEnr+lMzHlVzGeWsg2+RnOxJK3jZam7cir
-# Pi+r2kBktHeBq5KPyjJKYtsXg6yBPZ/wgQA2d3rijOCOkpQvKw+Gzneg/CPhiCcL
-# vznecHRCmG3Rk5+HbjQ+c/pNreJxzn67D0iam+s2X2TR32s0tIIyrCvFBrILpP7/
-# 3PwF2zeSYRSWskQE2EPjKoyvqqZ2K/ye+E3L8fOkhjZJRrGyMIp4ffH9h174FEt2
-# pWP+h7zMdgJNNrF3N/qP/Y722jNuDP4/M0s+uMhq8tBUJsv8iU0LA2uEt7yWnVW7
-# +fPOj1bGvjQA8ZZQXKRSFSLYG9EwZwB16XXdrTTT7XQ8WxnWLmQsKxGiyq1kwJO3
-# I64NuZ6s4NnuhgzjkYChKhBSZ/0+cCIRlqiM0pwxhIZKUJchtGzj2xGnxbz1dIdW
-# AMiqVaE81EuHI7ftHf1I+EjI90WjGHVixksGvS2xynhxC3ujoYt7dYGeL/fWHKcL
-# 5ICk+otMd7p+BMeDlsausrbpf58SVScijLHRyxr9LlOecKGCDiwwgg4oBgorBgEE
-# AYI3AwMBMYIOGDCCDhQGCSqGSIb3DQEHAqCCDgUwgg4BAgEDMQ0wCwYJYIZIAWUD
-# BAIBMIH/BgsqhkiG9w0BCRABBKCB7wSB7DCB6QIBAQYLYIZIAYb4RQEHFwMwITAJ
-# BgUrDgMCGgUABBT6YtKWW9Ekk8kmmCFSS+cSSgz1ZwIVAIx4GYfVv5qZ4PmltVZD
-# gT82mqKCGA8yMDIyMDMzMTE3MDIzOVowAwIBHqCBhqSBgzCBgDELMAkGA1UEBhMC
-# VVMxHTAbBgNVBAoTFFN5bWFudGVjIENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1h
-# bnRlYyBUcnVzdCBOZXR3b3JrMTEwLwYDVQQDEyhTeW1hbnRlYyBTSEEyNTYgVGlt
-# ZVN0YW1waW5nIFNpZ25lciAtIEczoIIKizCCBTgwggQgoAMCAQICEHsFsdRJaFFE
-# 98mJ0pwZnRIwDQYJKoZIhvcNAQELBQAwgb0xCzAJBgNVBAYTAlVTMRcwFQYDVQQK
-# Ew5WZXJpU2lnbiwgSW5jLjEfMB0GA1UECxMWVmVyaVNpZ24gVHJ1c3QgTmV0d29y
-# azE6MDgGA1UECxMxKGMpIDIwMDggVmVyaVNpZ24sIEluYy4gLSBGb3IgYXV0aG9y
-# aXplZCB1c2Ugb25seTE4MDYGA1UEAxMvVmVyaVNpZ24gVW5pdmVyc2FsIFJvb3Qg
-# Q2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMTYwMTEyMDAwMDAwWhcNMzEwMTEx
-# MjM1OTU5WjB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9y
-# YXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNVBAMT
-# H1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0EwggEiMA0GCSqGSIb3DQEB
-# AQUAA4IBDwAwggEKAoIBAQC7WZ1ZVU+djHJdGoGi61XzsAGtPHGsMo8Fa4aaJwAy
-# l2pNyWQUSym7wtkpuS7sY7Phzz8LVpD4Yht+66YH4t5/Xm1AONSRBudBfHkcy8ut
-# G7/YlZHz8O5s+K2WOS5/wSe4eDnFhKXt7a+Hjs6Nx23q0pi1Oh8eOZ3D9Jqo9ITh
-# xNF8ccYGKbQ/5IMNJsN7CD5N+Qq3M0n/yjvU9bKbS+GImRr1wOkzFNbfx4Dbke7+
-# vJJXcnf0zajM/gn1kze+lYhqxdz0sUvUzugJkV+1hHk1inisGTKPI8EyQRtZDqk+
-# scz51ivvt9jk1R1tETqS9pPJnONI7rtTDtQ2l4Z4xaE3AgMBAAGjggF3MIIBczAO
-# BgNVHQ8BAf8EBAMCAQYwEgYDVR0TAQH/BAgwBgEB/wIBADBmBgNVHSAEXzBdMFsG
-# C2CGSAGG+EUBBxcDMEwwIwYIKwYBBQUHAgEWF2h0dHBzOi8vZC5zeW1jYi5jb20v
-# Y3BzMCUGCCsGAQUFBwICMBkaF2h0dHBzOi8vZC5zeW1jYi5jb20vcnBhMC4GCCsG
-# AQUFBwEBBCIwIDAeBggrBgEFBQcwAYYSaHR0cDovL3Muc3ltY2QuY29tMDYGA1Ud
-# HwQvMC0wK6ApoCeGJWh0dHA6Ly9zLnN5bWNiLmNvbS91bml2ZXJzYWwtcm9vdC5j
-# cmwwEwYDVR0lBAwwCgYIKwYBBQUHAwgwKAYDVR0RBCEwH6QdMBsxGTAXBgNVBAMT
-# EFRpbWVTdGFtcC0yMDQ4LTMwHQYDVR0OBBYEFK9j1sqjToVy4Ke8QfMpojh/gHVi
-# MB8GA1UdIwQYMBaAFLZ3+mlIR59TEtXC6gcydgfRlwcZMA0GCSqGSIb3DQEBCwUA
-# A4IBAQB16rAt1TQZXDJF/g7h1E+meMFv1+rd3E/zociBiPenjxXmQCmt5l30otlW
-# ZIRxMCrdHmEXZiBWBpgZjV1x8viXvAn9HJFHyeLojQP7zJAv1gpsTjPs1rSTyEyQ
-# Y0g5QCHE3dZuiZg8tZiX6KkGtwnJj1NXQZAv4R5NTtzKEHhsQm7wtsX4YVxS9U72
-# a433Snq+8839A9fZ9gOoD+NT9wp17MZ1LqpmhQSZt/gGV+HGDvbor9rsmxgfqrnj
-# OgC/zoqUywHbnsc4uw9Sq9HjlANgCk2g/idtFDL8P5dA4b+ZidvkORS92uTTw+or
-# WrOVWFUEfcea7CMDjYUq0v+uqWGBMIIFSzCCBDOgAwIBAgIQe9Tlr7rMBz+hASME
-# IkFNEjANBgkqhkiG9w0BAQsFADB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3lt
-# YW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdv
-# cmsxKDAmBgNVBAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0EwHhcN
-# MTcxMjIzMDAwMDAwWhcNMjkwMzIyMjM1OTU5WjCBgDELMAkGA1UEBhMCVVMxHTAb
-# BgNVBAoTFFN5bWFudGVjIENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBU
-# cnVzdCBOZXR3b3JrMTEwLwYDVQQDEyhTeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1w
-# aW5nIFNpZ25lciAtIEczMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA
-# rw6Kqvjcv2l7VBdxRwm9jTyB+HQVd2eQnP3eTgKeS3b25TY+ZdUkIG0w+d0dg+k/
-# J0ozTm0WiuSNQI0iqr6nCxvSB7Y8tRokKPgbclE9yAmIJgg6+fpDI3VHcAyzX1uP
-# CB1ySFdlTa8CPED39N0yOJM/5Sym81kjy4DeE035EMmqChhsVWFX0fECLMS1q/Js
-# I9KfDQ8ZbK2FYmn9ToXBilIxq1vYyXRS41dsIr9Vf2/KBqs/SrcidmXs7DbylpWB
-# Jiz9u5iqATjTryVAmwlT8ClXhVhe6oVIQSGH5d600yaye0BTWHmOUjEGTZQDRcTO
-# PAPstwDyOiLFtG/l77CKmwIDAQABo4IBxzCCAcMwDAYDVR0TAQH/BAIwADBmBgNV
-# HSAEXzBdMFsGC2CGSAGG+EUBBxcDMEwwIwYIKwYBBQUHAgEWF2h0dHBzOi8vZC5z
-# eW1jYi5jb20vY3BzMCUGCCsGAQUFBwICMBkaF2h0dHBzOi8vZC5zeW1jYi5jb20v
-# cnBhMEAGA1UdHwQ5MDcwNaAzoDGGL2h0dHA6Ly90cy1jcmwud3Muc3ltYW50ZWMu
-# Y29tL3NoYTI1Ni10c3MtY2EuY3JsMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMIMA4G
-# A1UdDwEB/wQEAwIHgDB3BggrBgEFBQcBAQRrMGkwKgYIKwYBBQUHMAGGHmh0dHA6
-# Ly90cy1vY3NwLndzLnN5bWFudGVjLmNvbTA7BggrBgEFBQcwAoYvaHR0cDovL3Rz
-# LWFpYS53cy5zeW1hbnRlYy5jb20vc2hhMjU2LXRzcy1jYS5jZXIwKAYDVR0RBCEw
-# H6QdMBsxGTAXBgNVBAMTEFRpbWVTdGFtcC0yMDQ4LTYwHQYDVR0OBBYEFKUTAamf
-# hcwbbhYeXzsxqnk2AHsdMB8GA1UdIwQYMBaAFK9j1sqjToVy4Ke8QfMpojh/gHVi
-# MA0GCSqGSIb3DQEBCwUAA4IBAQBGnq/wuKJfoplIz6gnSyHNsrmmcnBjL+NVKXs5
-# Rk7nfmUGWIu8V4qSDQjYELo2JPoKe/s702K/SpQV5oLbilRt/yj+Z89xP+YzCdmi
-# WRD0Hkr+Zcze1GvjUil1AEorpczLm+ipTfe0F1mSQcO3P4bm9sB/RDxGXBda46Q7
-# 1Wkm1SF94YBnfmKst04uFZrlnCOvWxHqcalB+Q15OKmhDc+0sdo+mnrHIsV0zd9H
-# CYbE/JElshuW6YUI6N3qdGBuYKVWeg3IRFjc5vlIFJ7lv94AvXexmBRyFCTfxxEs
-# HwA/w0sUxmcczB4Go5BfXFSLPuMzW4IPxbeGAk5xn+lmRT92MYICWjCCAlYCAQEw
-# gYswdzELMAkGA1UEBhMCVVMxHTAbBgNVBAoTFFN5bWFudGVjIENvcnBvcmF0aW9u
-# MR8wHQYDVQQLExZTeW1hbnRlYyBUcnVzdCBOZXR3b3JrMSgwJgYDVQQDEx9TeW1h
-# bnRlYyBTSEEyNTYgVGltZVN0YW1waW5nIENBAhB71OWvuswHP6EBIwQiQU0SMAsG
-# CWCGSAFlAwQCAaCBpDAaBgkqhkiG9w0BCQMxDQYLKoZIhvcNAQkQAQQwHAYJKoZI
-# hvcNAQkFMQ8XDTIyMDMzMTE3MDIzOVowLwYJKoZIhvcNAQkEMSIEIBU8WSZ1gIPC
-# FfQKRGBjVk5Ey4MkxzIZwlLHBWNK1f8+MDcGCyqGSIb3DQEJEAIvMSgwJjAkMCIE
-# IMR0znYAfQI5Tg2l5N58FMaA+eKCATz+9lPvXbcf32H4MAsGCSqGSIb3DQEBAQSC
-# AQB2y1VOZG6XjjWYidw+ZkJgT9pjbJiepYRhd8evSWpnn3kADFkhU1ey3IQAsx5f
-# JxWTeTFOUJPhmYfCqlF8YimFE443PhIPHgraGUXhlviV8YcLkQyGV0b9wg70U7nq
-# RrwqVibtQrOvbgatn4GoOE5YbxZN6btUonEXMd+VlWVjfzpvniVxXSxOARRXlCOI
-# HZEEEWch9JSIrK6ZH+XGL07rdGsibOZmG0Kwxa9NIZ8o3pkECvMis4lr7pWlhctE
-# CRPaMtzE4XhXdI+vjn4tvnqfWF4dqonLgIOsZnGSTj1/B665gzIl/j9O4EjaIB/7
-# E3zVndasE11sQ/7elXnavKcQ
+# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCI
+# ia4sDA+FAOJTMUZhWCQxZg4nl45Oc3wUqzhujYq5AzANBgkqhkiG9w0BAQEFAASC
+# AgDGOiGFOTan3quxd0JiRV90W6r/qYwAbiCgLr1Jrh9Cm+SGPl1GKIj0z5RX+D2k
+# 5J7sAVQetSEenKIs+yNiJzEdptVEE9HjP9i/ABuwTu/ukbfpZZiLWv/DoS0yEEBl
+# 6mgPFGnxbt8uSBMtkC3eiSCXmNTVLnNFQHs/d5YxIXyEKB/rcmJW9mHVLkAmZ7xE
+# cRDVvEb2iOoUGvnVbtia0iRentMG2eZk27vggllL9JwwYLiVdemiWN8QZzB+T7Uo
+# 3+EImTkQsVoPNhuHjeVS6AzT7yaEjFzQ188KmrpYky7DWgeFov5IixkvhD/wgiQ7
+# C28e3HbCS+8NJSpMLsCsDjqVWgkIx5NW1oL6W+E++Zpb0/K/OO1XEd33xailg4Eb
+# jEY5TLdBsCWV05/1Q3Ef/qd0vLpDuXnIEjcoCpIP/VEMzANq2EKhznepQ0+hAVKo
+# Nz3K6H48pq2eeDS24J92fw+5yQyGIT53lNqo6qQbOMx+wotS88tYXlNwO52N4w3Y
+# J1QnZmvcRMmfcIpJMCndSMjXUBTfqhWm+2TGW4cezPT4Cp8SR2HJJH2yq6SdU2lL
+# /rUTT/Os2zejrHZtf1jEI8yVeYBxYKIi/aJDyDmuN0Uq4nE2vhDmpq4pbJHYSch3
+# yVMtrAVP6BCwH7Xo8Ttw5Ti3jchG6DxVARs8Hs17Ymj6S6GCDiswgg4nBgorBgEE
+# AYI3AwMBMYIOFzCCDhMGCSqGSIb3DQEHAqCCDgQwgg4AAgEDMQ0wCwYJYIZIAWUD
+# BAIBMIH+BgsqhkiG9w0BCRABBKCB7gSB6zCB6AIBAQYLYIZIAYb4RQEHFwMwITAJ
+# BgUrDgMCGgUABBSL0gxSUGhWScDEs4yWUHRprxYmSQIUCNvFtWbcOhAUsbHwL1Gm
+# S5i2dhIYDzIwMjIwNTIzMjAxMjM0WjADAgEeoIGGpIGDMIGAMQswCQYDVQQGEwJV
+# UzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFu
+# dGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBUaW1l
+# U3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQewWx1EloUUT3
+# yYnSnBmdEjANBgkqhkiG9w0BAQsFADCBvTELMAkGA1UEBhMCVVMxFzAVBgNVBAoT
+# DlZlcmlTaWduLCBJbmMuMR8wHQYDVQQLExZWZXJpU2lnbiBUcnVzdCBOZXR3b3Jr
+# MTowOAYDVQQLEzEoYykgMjAwOCBWZXJpU2lnbiwgSW5jLiAtIEZvciBhdXRob3Jp
+# emVkIHVzZSBvbmx5MTgwNgYDVQQDEy9WZXJpU2lnbiBVbml2ZXJzYWwgUm9vdCBD
+# ZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTAeFw0xNjAxMTIwMDAwMDBaFw0zMTAxMTEy
+# MzU5NTlaMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3Jh
+# dGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEoMCYGA1UEAxMf
+# U3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQTCCASIwDQYJKoZIhvcNAQEB
+# BQADggEPADCCAQoCggEBALtZnVlVT52Mcl0agaLrVfOwAa08cawyjwVrhponADKX
+# ak3JZBRLKbvC2Sm5Luxjs+HPPwtWkPhiG37rpgfi3n9ebUA41JEG50F8eRzLy60b
+# v9iVkfPw7mz4rZY5Ln/BJ7h4OcWEpe3tr4eOzo3HberSmLU6Hx45ncP0mqj0hOHE
+# 0XxxxgYptD/kgw0mw3sIPk35CrczSf/KO9T1sptL4YiZGvXA6TMU1t/HgNuR7v68
+# kldyd/TNqMz+CfWTN76ViGrF3PSxS9TO6AmRX7WEeTWKeKwZMo8jwTJBG1kOqT6x
+# zPnWK++32OTVHW0ROpL2k8mc40juu1MO1DaXhnjFoTcCAwEAAaOCAXcwggFzMA4G
+# A1UdDwEB/wQEAwIBBjASBgNVHRMBAf8ECDAGAQH/AgEAMGYGA1UdIARfMF0wWwYL
+# YIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0cHM6Ly9kLnN5bWNiLmNvbS9j
+# cHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5bWNiLmNvbS9ycGEwLgYIKwYB
+# BQUHAQEEIjAgMB4GCCsGAQUFBzABhhJodHRwOi8vcy5zeW1jZC5jb20wNgYDVR0f
+# BC8wLTAroCmgJ4YlaHR0cDovL3Muc3ltY2IuY29tL3VuaXZlcnNhbC1yb290LmNy
+# bDATBgNVHSUEDDAKBggrBgEFBQcDCDAoBgNVHREEITAfpB0wGzEZMBcGA1UEAxMQ
+# VGltZVN0YW1wLTIwNDgtMzAdBgNVHQ4EFgQUr2PWyqNOhXLgp7xB8ymiOH+AdWIw
+# HwYDVR0jBBgwFoAUtnf6aUhHn1MS1cLqBzJ2B9GXBxkwDQYJKoZIhvcNAQELBQAD
+# ggEBAHXqsC3VNBlcMkX+DuHUT6Z4wW/X6t3cT/OhyIGI96ePFeZAKa3mXfSi2VZk
+# hHEwKt0eYRdmIFYGmBmNXXHy+Je8Cf0ckUfJ4uiNA/vMkC/WCmxOM+zWtJPITJBj
+# SDlAIcTd1m6JmDy1mJfoqQa3CcmPU1dBkC/hHk1O3MoQeGxCbvC2xfhhXFL1TvZr
+# jfdKer7zzf0D19n2A6gP41P3CnXsxnUuqmaFBJm3+AZX4cYO9uiv2uybGB+queM6
+# AL/OipTLAduexzi7D1Kr0eOUA2AKTaD+J20UMvw/l0Dhv5mJ2+Q5FL3a5NPD6ita
+# s5VYVQR9x5rsIwONhSrS/66pYYEwggVLMIIEM6ADAgECAhB71OWvuswHP6EBIwQi
+# QU0SMA0GCSqGSIb3DQEBCwUAMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1h
+# bnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29y
+# azEoMCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQTAeFw0x
+# NzEyMjMwMDAwMDBaFw0yOTAzMjIyMzU5NTlaMIGAMQswCQYDVQQGEwJVUzEdMBsG
+# A1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRy
+# dXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBp
+# bmcgU2lnbmVyIC0gRzMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCv
+# Doqq+Ny/aXtUF3FHCb2NPIH4dBV3Z5Cc/d5OAp5LdvblNj5l1SQgbTD53R2D6T8n
+# SjNObRaK5I1AjSKqvqcLG9IHtjy1GiQo+BtyUT3ICYgmCDr5+kMjdUdwDLNfW48I
+# HXJIV2VNrwI8QPf03TI4kz/lLKbzWSPLgN4TTfkQyaoKGGxVYVfR8QIsxLWr8mwj
+# 0p8NDxlsrYViaf1OhcGKUjGrW9jJdFLjV2wiv1V/b8oGqz9KtyJ2ZezsNvKWlYEm
+# LP27mKoBONOvJUCbCVPwKVeFWF7qhUhBIYfl3rTTJrJ7QFNYeY5SMQZNlANFxM48
+# A+y3API6IsW0b+XvsIqbAgMBAAGjggHHMIIBwzAMBgNVHRMBAf8EAjAAMGYGA1Ud
+# IARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0cHM6Ly9kLnN5
+# bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5bWNiLmNvbS9y
+# cGEwQAYDVR0fBDkwNzA1oDOgMYYvaHR0cDovL3RzLWNybC53cy5zeW1hbnRlYy5j
+# b20vc2hhMjU2LXRzcy1jYS5jcmwwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgwDgYD
+# VR0PAQH/BAQDAgeAMHcGCCsGAQUFBwEBBGswaTAqBggrBgEFBQcwAYYeaHR0cDov
+# L3RzLW9jc3Aud3Muc3ltYW50ZWMuY29tMDsGCCsGAQUFBzAChi9odHRwOi8vdHMt
+# YWlhLndzLnN5bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNlcjAoBgNVHREEITAf
+# pB0wGzEZMBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtNjAdBgNVHQ4EFgQUpRMBqZ+F
+# zBtuFh5fOzGqeTYAex0wHwYDVR0jBBgwFoAUr2PWyqNOhXLgp7xB8ymiOH+AdWIw
+# DQYJKoZIhvcNAQELBQADggEBAEaer/C4ol+imUjPqCdLIc2yuaZycGMv41UpezlG
+# Tud+ZQZYi7xXipINCNgQujYk+gp7+zvTYr9KlBXmgtuKVG3/KP5nz3E/5jMJ2aJZ
+# EPQeSv5lzN7Ua+NSKXUASiulzMub6KlN97QXWZJBw7c/hub2wH9EPEZcF1rjpDvV
+# aSbVIX3hgGd+Yqy3Ti4VmuWcI69bEepxqUH5DXk4qaENz7Sx2j6aescixXTN30cJ
+# hsT8kSWyG5bphQjo3ep0YG5gpVZ6DchEWNzm+UgUnuW/3gC9d7GYFHIUJN/HESwf
+# AD/DSxTGZxzMHgajkF9cVIs+4zNbgg/Ft4YCTnGf6WZFP3YxggJaMIICVgIBATCB
+# izB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24x
+# HzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNVBAMTH1N5bWFu
+# dGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEjBCJBTRIwCwYJ
+# YIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRABBDAcBgkqhkiG
+# 9w0BCQUxDxcNMjIwNTIzMjAxMjM0WjAvBgkqhkiG9w0BCQQxIgQg/v28GqA4LJQc
+# jD5QuMXJW/Z1Hz3AsLIVF9puy4C0x3YwNwYLKoZIhvcNAQkQAi8xKDAmMCQwIgQg
+# xHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZIhvcNAQEBBIIB
+# AF5L29o7NCQPWiEU+29/SLRObGJ67dYzHQzZ7ENdsm8IcKuMQnAVknP2fkLxx4/o
+# YY8VSRWdvlfkZoM+kD4BTm5Nlrx/M6SsiaHnPTdycbt2bJfLoJJykozuvHGtb6ST
+# vhs73xJeLyMnGK3qLxYflqhZ2fTzWEe9BCcomJUvsxly+bXdmeuueA/epZezxsvo
+# lEi/It5ae7kWR+cDoXWLdEIfJMiebz3yUwI7c2cE1oFltJEaCCjORNSWgqJTR6Ns
+# 2bc2GCmCISxxM+eYhI+8++5tdAYwbj/9AwEFUYr9xC/G10GmEbVVuwHcMsAN6aIG
+# s6rci5+k+N1AztruKTdDMbA=
 # SIG # End signature block
