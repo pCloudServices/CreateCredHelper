@@ -23,7 +23,7 @@ $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "2.1"
+$ScriptVersion = "2.2"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1525,7 +1525,7 @@ Function Invoke-ResetCredFile
         $Component
     )
     try{
-        $generatedPassword = New-RandomPassword -Length 20 -Lowercase -Uppercase -Numbers -Symbols | ConvertTo-SecureString -AsPlainText -Force
+        $generatedPassword = New-RandomPassword -Length 39 -Lowercase -Uppercase -Numbers -Symbols | ConvertTo-SecureString -AsPlainText -Force
         $Component.InitPVWAURL()
         # Prompt User and get Token
         Invoke-Logon
@@ -1621,8 +1621,7 @@ Function Get-UserAndResetPassword{
             }
             Catch
             {
-                Write-LogMessage -Type Error -Msg "There was an error Restting or Activating user '$ComponentUser'. The error was: $($_.Exception.Response.StatusDescription)"
-                Throw $(New-Object System.Exception ("There was an error Restting or Activating user '$ComponentUser'.",$_.Exception))
+                Write-LogMessage -Type Error -Msg "There was an error Restting or Activating user '$ComponentUser'. The error was: $($_.ErrorDetails.Message)"
             }
         }
     } catch {
@@ -1654,9 +1653,21 @@ Write-LogMessage -type Info -MSG "Resetting CPM Scanner ApiKey, this can take a 
 Write-LogMessage -type Info -MSG "Testing if SendWait function will work..."
 $dummyString = "Test"
 $teststring = $null
-#Escape special chars that have other meaning in SendKeys class.
+$specialchars = '!@#$%^&*()'',./\`~[]":?<>+|'.ToCharArray()
 [string]$simplePw = ($creds.GetNetworkCredential().password)
-$simplePw = $simplePw.Replace("+","{+}").Replace("~","{~}").Replace("^","{^}").Replace("(","{(}").Replace(")","{)}")
+
+#Escape curly brackets from SendWait command
+if($simplePw -match "{"){$simplePw = $simplePw.Replace("{","_LEFT_")}
+if($simplePw -match "}"){$simplePw = $simplePw.Replace("}","_RIGHT_")}
+$simplePw = $simplePw.Replace('_LEFT_',"{{}").Replace('_RIGHT_',"{}}")
+
+#Escape special chars that have other meaning in SendKeys class.
+foreach($char in $specialchars){
+    if($simplePw -match "\$char")
+    {
+        $simplepw = $simplePw.Replace("$char","{$char}")
+    }
+}
 
 #we need to test this command since some endpoint agents are blocking it, if its blocked, user will have to enter admin pw manually.
 [System.Windows.Forms.SendKeys]::SendWait($dummyString);
@@ -1780,8 +1791,8 @@ return
 # SIG # Begin signature block
 # MIIgTQYJKoZIhvcNAQcCoIIgPjCCIDoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCD0qliZsklzUQDz
-# ppBkeqHsQ8FldPnvBA6FPUBlRlNrhaCCDl8wggboMIIE0KADAgECAhB3vQ4Ft1kL
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAD6GDA7oYK/zy0
+# SinTAmFsBxw0MblVy14+ltj/NsLf0qCCDl8wggboMIIE0KADAgECAhB3vQ4Ft1kL
 # th1HYVMeP3XtMA0GCSqGSIb3DQEBCwUAMFMxCzAJBgNVBAYTAkJFMRkwFwYDVQQK
 # ExBHbG9iYWxTaWduIG52LXNhMSkwJwYDVQQDEyBHbG9iYWxTaWduIENvZGUgU2ln
 # bmluZyBSb290IFI0NTAeFw0yMDA3MjgwMDAwMDBaFw0zMDA3MjgwMDAwMDBaMFwx
@@ -1862,23 +1873,23 @@ return
 # R2xvYmFsU2lnbiBudi1zYTEyMDAGA1UEAxMpR2xvYmFsU2lnbiBHQ0MgUjQ1IEVW
 # IENvZGVTaWduaW5nIENBIDIwMjACDHBNxPwWOpXgXVV8DDANBglghkgBZQMEAgEF
 # AKB8MBAGCisGAQQBgjcCAQwxAjAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEE
-# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCI
-# ia4sDA+FAOJTMUZhWCQxZg4nl45Oc3wUqzhujYq5AzANBgkqhkiG9w0BAQEFAASC
-# AgDGOiGFOTan3quxd0JiRV90W6r/qYwAbiCgLr1Jrh9Cm+SGPl1GKIj0z5RX+D2k
-# 5J7sAVQetSEenKIs+yNiJzEdptVEE9HjP9i/ABuwTu/ukbfpZZiLWv/DoS0yEEBl
-# 6mgPFGnxbt8uSBMtkC3eiSCXmNTVLnNFQHs/d5YxIXyEKB/rcmJW9mHVLkAmZ7xE
-# cRDVvEb2iOoUGvnVbtia0iRentMG2eZk27vggllL9JwwYLiVdemiWN8QZzB+T7Uo
-# 3+EImTkQsVoPNhuHjeVS6AzT7yaEjFzQ188KmrpYky7DWgeFov5IixkvhD/wgiQ7
-# C28e3HbCS+8NJSpMLsCsDjqVWgkIx5NW1oL6W+E++Zpb0/K/OO1XEd33xailg4Eb
-# jEY5TLdBsCWV05/1Q3Ef/qd0vLpDuXnIEjcoCpIP/VEMzANq2EKhznepQ0+hAVKo
-# Nz3K6H48pq2eeDS24J92fw+5yQyGIT53lNqo6qQbOMx+wotS88tYXlNwO52N4w3Y
-# J1QnZmvcRMmfcIpJMCndSMjXUBTfqhWm+2TGW4cezPT4Cp8SR2HJJH2yq6SdU2lL
-# /rUTT/Os2zejrHZtf1jEI8yVeYBxYKIi/aJDyDmuN0Uq4nE2vhDmpq4pbJHYSch3
-# yVMtrAVP6BCwH7Xo8Ttw5Ti3jchG6DxVARs8Hs17Ymj6S6GCDiswgg4nBgorBgEE
+# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCAd
+# 3Bb2xECc6bAqSlfpVbrUq+yijgPghfgze1ppnI6EjzANBgkqhkiG9w0BAQEFAASC
+# AgAVpn9sDRKccQL8sLK0xcpBnMXkQXWMQTf/nu41YocH7ptOCk2dSof5mRQvvydD
+# V658PPvmNUQLbP+5jurkhL8mQCmaHKSpocBJ2flYvn7RuHIbArkSmcgYNUaZzSrA
+# J6LNV2B+Icl7xJu8prvL6EpUcvlldlUvPdVc6T7I3LJzuEMzIBPvM1EodNRXmZeY
+# uPjnU17o/DUfuEy+aoqVlxW9xDNJgzhPz8ECpo+fz1DMETy7h5O+bn66vaRBebeE
+# o1uLYS/pCFjTqq9bM/qBVYQfg/tdF9BSvWFxrzw6wv6AO8+x7hophtd5qrvLgbo9
+# NqPN56SlsuKuwMunAdPCxYnOn5CzVLSinl1fSfWWFVrL9zvdIjtPPPKaZqC2atg6
+# q/e0wfFVxPNdV5O2zACfykHS31WEh7ytU9lYNPdQEN0F//xAClNzYmNh23HIvKYN
+# XhDoTmBshBJQj5p3Yqk/hpBB2pvN2oxn/UQbC8DK/vVSAqwnEY+Q6FmKKLI6s0Wx
+# h7IEGJOU7Rp8/kUZ7BjI2qhFhphLMnkVzromu4setrPruc6zRJ2sKxQYGnPv1YkO
+# 7NM9p9SuqD4B8FbIm2OCXucmXU0nLJV8RYuV+Pes2X6vaBO/iatgY4YrwTFw+ZVH
+# bQy6hCIyVYD1j1FyUetIfiSimPCElthF9xRzXBQDVpGJQaGCDiswgg4nBgorBgEE
 # AYI3AwMBMYIOFzCCDhMGCSqGSIb3DQEHAqCCDgQwgg4AAgEDMQ0wCwYJYIZIAWUD
 # BAIBMIH+BgsqhkiG9w0BCRABBKCB7gSB6zCB6AIBAQYLYIZIAYb4RQEHFwMwITAJ
-# BgUrDgMCGgUABBSL0gxSUGhWScDEs4yWUHRprxYmSQIUCNvFtWbcOhAUsbHwL1Gm
-# S5i2dhIYDzIwMjIwNTIzMjAxMjM0WjADAgEeoIGGpIGDMIGAMQswCQYDVQQGEwJV
+# BgUrDgMCGgUABBReINuWz5g7PrQ+s6oNdUiPG7RzbQIUMEUjA828TjwRj9JOBMfH
+# EeIieDoYDzIwMjIwOTAyMDgwNjI5WjADAgEeoIGGpIGDMIGAMQswCQYDVQQGEwJV
 # UzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFu
 # dGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBUaW1l
 # U3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQewWx1EloUUT3
@@ -1942,13 +1953,13 @@ return
 # HzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNVBAMTH1N5bWFu
 # dGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEjBCJBTRIwCwYJ
 # YIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRABBDAcBgkqhkiG
-# 9w0BCQUxDxcNMjIwNTIzMjAxMjM0WjAvBgkqhkiG9w0BCQQxIgQg/v28GqA4LJQc
-# jD5QuMXJW/Z1Hz3AsLIVF9puy4C0x3YwNwYLKoZIhvcNAQkQAi8xKDAmMCQwIgQg
+# 9w0BCQUxDxcNMjIwOTAyMDgwNjI5WjAvBgkqhkiG9w0BCQQxIgQgwhP+qplwOTgf
+# pp0YTprQBzgP5o5Y+m6dNGVGOMt1+7UwNwYLKoZIhvcNAQkQAi8xKDAmMCQwIgQg
 # xHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZIhvcNAQEBBIIB
-# AF5L29o7NCQPWiEU+29/SLRObGJ67dYzHQzZ7ENdsm8IcKuMQnAVknP2fkLxx4/o
-# YY8VSRWdvlfkZoM+kD4BTm5Nlrx/M6SsiaHnPTdycbt2bJfLoJJykozuvHGtb6ST
-# vhs73xJeLyMnGK3qLxYflqhZ2fTzWEe9BCcomJUvsxly+bXdmeuueA/epZezxsvo
-# lEi/It5ae7kWR+cDoXWLdEIfJMiebz3yUwI7c2cE1oFltJEaCCjORNSWgqJTR6Ns
-# 2bc2GCmCISxxM+eYhI+8++5tdAYwbj/9AwEFUYr9xC/G10GmEbVVuwHcMsAN6aIG
-# s6rci5+k+N1AztruKTdDMbA=
+# AKjfZazCX/o3ep3swvYTnR7r9dRiUzhUpjJESrtIAmjNRfVIgtHHsZAWFsnMv35t
+# WgHtyzTqTzOucZqwXwbmN4UXNWQvIb67rBJzv9zl7PP781lmgiEKHinSsT4szBuf
+# rx7ATKN0RuL50gV1AkHq3ULGibiUaZ2Qx1t3RCJaYKFXO9vI13XvP1FF+9iDrurv
+# +NxScZdZf25oh8Mav8kva+D8ydrhGzG2Y9wpjYllVQ61NnJT0fXg/XYRncvxib1z
+# kiKD0yUwTpVbyLpO7UrGT5ktsxUWZKkTxhJHswkH4OwlW8k1amDE62I/8OwCq5+7
+# 4jlbKsY3tSQtJbPMlbCkbcs=
 # SIG # End signature block
