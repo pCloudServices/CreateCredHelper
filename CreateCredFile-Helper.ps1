@@ -2,7 +2,7 @@
 #
 # NAME: Reset Cred File Helper
 #
-# AUTHOR:  Mike Brook<mike.brook@cyberark.com>, Assaf Miron<assaf.miron@cyberark.com>
+# AUTHOR:  Mike Brook<mike.brook@cyberark.com>
 #
 # COMMENT: 
 # Script will attempt to regenerate the local Applicative Cred File and Sync it in the Vault.
@@ -23,7 +23,7 @@ $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "2.2"
+$ScriptVersion = "2.3"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -447,7 +447,7 @@ param (
 	
     try{
         # Check if we need to download the gitHub version
-        If($shouldDownloadLatestVersion)
+        If($shouldDownloadLatestVersion -eq $true)
         {
             # GitHub has a more updated version
             $retLatestVersion = $false
@@ -699,7 +699,8 @@ Function Find-Components
 		$REGKEY_CPMSERVICE = "CyberArk Password Manager"
         $REGKEY_CPMScannerSERVICE = "CyberArk Central Policy Manager Scanner"
 		$REGKEY_PVWASERVICE = "CyberArk Scheduled Tasks"
-		$REGKEY_PSMSERVICE = "Cyber-Ark Privileged Session Manager"
+		$REGKEY_PSMSERVICEold = "Cyber-Ark Privileged Session Manager" #12.7-
+        $REGKEY_PSMSERVICEnew = "CyberArk Privileged Session Manager" #13.0+
 		$REGKEY_AIMSERVICE = "CyberArk Application Password Provider"
 	}
 	Process {
@@ -768,6 +769,12 @@ Function Find-Components
                     try{
                         # Check if PSM is installed
 						Write-LogMessage -Type "Debug" -MSG "Searching for PSM..."
+						Foreach($psmservice in @($REGKEY_PSMSERVICEold,$REGKEY_PSMSERVICEnew)){
+                            if($NULL -ne ($componentPath = $(Get-ServiceInstallPath $psmservice)))
+                            {
+                                $REGKEY_PSMSERVICE = $psmservice
+                            }
+						}
 						if($NULL -ne ($componentPath = $(Get-ServiceInstallPath $REGKEY_PSMSERVICE)))
 						{
                             Write-LogMessage -Type "Info" -MSG "Found PSM installation"
@@ -916,6 +923,13 @@ Function Set-PVWAURL{
         {
             $PVWAurl = (Read-Host "Enter your Portal URL (eg; 'https://mikeb.privilegecloud.cyberark.com')")
         }
+		
+		# Let user confirm this is the correct URL, otherwise, enter manually
+        $confirmPVWAUrl = Get-Choice -Title "Is this your Portal URL: $PVWAurl" -Options "Yes", "No, let me type." -DefaultChoice 1
+        if($confirmPVWAUrl -eq "No, let me type."){
+            $PVWAurl = (Read-Host "Enter your Portal URL (eg; 'https://mikeb.privilegecloud.cyberark.com' or https://mikeb.privilegecloud.cyberark.cloud)")
+        }
+
         Write-LogMessage -type debug -Msg "The PVWA URL to be used is: '$PVWAurl'"
     } Catch{
         Throw $(New-Object System.Exception ("There was an error reading the $ComponentID configuration file '$ConfigPath'",$_.Exception))
@@ -1791,8 +1805,8 @@ return
 # SIG # Begin signature block
 # MIIgTQYJKoZIhvcNAQcCoIIgPjCCIDoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAD6GDA7oYK/zy0
-# SinTAmFsBxw0MblVy14+ltj/NsLf0qCCDl8wggboMIIE0KADAgECAhB3vQ4Ft1kL
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBj3GBxyR1O1NEV
+# sbp2ypbEc/VG+W1vVVj0GnjcLc08N6CCDl8wggboMIIE0KADAgECAhB3vQ4Ft1kL
 # th1HYVMeP3XtMA0GCSqGSIb3DQEBCwUAMFMxCzAJBgNVBAYTAkJFMRkwFwYDVQQK
 # ExBHbG9iYWxTaWduIG52LXNhMSkwJwYDVQQDEyBHbG9iYWxTaWduIENvZGUgU2ln
 # bmluZyBSb290IFI0NTAeFw0yMDA3MjgwMDAwMDBaFw0zMDA3MjgwMDAwMDBaMFwx
@@ -1873,23 +1887,23 @@ return
 # R2xvYmFsU2lnbiBudi1zYTEyMDAGA1UEAxMpR2xvYmFsU2lnbiBHQ0MgUjQ1IEVW
 # IENvZGVTaWduaW5nIENBIDIwMjACDHBNxPwWOpXgXVV8DDANBglghkgBZQMEAgEF
 # AKB8MBAGCisGAQQBgjcCAQwxAjAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEE
-# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCAd
-# 3Bb2xECc6bAqSlfpVbrUq+yijgPghfgze1ppnI6EjzANBgkqhkiG9w0BAQEFAASC
-# AgAVpn9sDRKccQL8sLK0xcpBnMXkQXWMQTf/nu41YocH7ptOCk2dSof5mRQvvydD
-# V658PPvmNUQLbP+5jurkhL8mQCmaHKSpocBJ2flYvn7RuHIbArkSmcgYNUaZzSrA
-# J6LNV2B+Icl7xJu8prvL6EpUcvlldlUvPdVc6T7I3LJzuEMzIBPvM1EodNRXmZeY
-# uPjnU17o/DUfuEy+aoqVlxW9xDNJgzhPz8ECpo+fz1DMETy7h5O+bn66vaRBebeE
-# o1uLYS/pCFjTqq9bM/qBVYQfg/tdF9BSvWFxrzw6wv6AO8+x7hophtd5qrvLgbo9
-# NqPN56SlsuKuwMunAdPCxYnOn5CzVLSinl1fSfWWFVrL9zvdIjtPPPKaZqC2atg6
-# q/e0wfFVxPNdV5O2zACfykHS31WEh7ytU9lYNPdQEN0F//xAClNzYmNh23HIvKYN
-# XhDoTmBshBJQj5p3Yqk/hpBB2pvN2oxn/UQbC8DK/vVSAqwnEY+Q6FmKKLI6s0Wx
-# h7IEGJOU7Rp8/kUZ7BjI2qhFhphLMnkVzromu4setrPruc6zRJ2sKxQYGnPv1YkO
-# 7NM9p9SuqD4B8FbIm2OCXucmXU0nLJV8RYuV+Pes2X6vaBO/iatgY4YrwTFw+ZVH
-# bQy6hCIyVYD1j1FyUetIfiSimPCElthF9xRzXBQDVpGJQaGCDiswgg4nBgorBgEE
+# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCBg
+# yMtnbGsJNzTskj9aliprz+I7C+Szc6WBmkyUaOhoDjANBgkqhkiG9w0BAQEFAASC
+# AgAVb4jniWkphfKGbENJnZPW6NHElCNexC84g1/9xofbbqktl3FcFs3Gux3tMa7v
+# u5FkmnHOT0Ls9wfDFG1g0fevTlxrF3jVJf2mp5UU6EdK47bj6UJ3Aq6Gr7xpS9Ax
+# jyC4O/vQ7kNEm+FoUpJEoT4IzoDGY4KnGMmmBW2ImJZGQt+fx8mGFZ3EsKI4rf7U
+# knr954nFan5zKnd4WxNmBLX2ZicbcXotKLoaRhnhVWzIk75MyqPgy6cQgcjjTG9p
+# yjaoRxH2E8MkpoOJfRdWYzgAb5JbPwBH+l1bREI7Fu5KkgsMPWNYJ6AmHi4Me7Pb
+# 2CnQs0UvNZs6V0I9qh2YaHQY18e3FWLiCU0aOTO4ZcP11eE7hwnKopItruQ8uEJo
+# FCRCSV9u/iEjkNAetP8P6E49xJLb6iYk3ZhD7H8Q6+OUObIJ0h7yZhCwfN308B2d
+# j2Jn0UZXSAnHAL6E3sNfWdEwvb8YGy0KW+MlsBcvISDKczWD35W1dhfjQXjCya3C
+# hgqJAtxUc7bEN0rWvn681pvVUnHJNgOHEr1giIFOsrTHTFc5zOMb67Ah4fGBSM07
+# cf41yp2xk+sRbhUWd8HI2oFRwYGdQMVDsaKZTtdfCz1Jvz+i8xpJCCmm4GQCY97+
+# u7L0rARO3sdrTqJF7oiL8/w2TevdMhx0ftQbp21JMpNkJaGCDiswgg4nBgorBgEE
 # AYI3AwMBMYIOFzCCDhMGCSqGSIb3DQEHAqCCDgQwgg4AAgEDMQ0wCwYJYIZIAWUD
 # BAIBMIH+BgsqhkiG9w0BCRABBKCB7gSB6zCB6AIBAQYLYIZIAYb4RQEHFwMwITAJ
-# BgUrDgMCGgUABBReINuWz5g7PrQ+s6oNdUiPG7RzbQIUMEUjA828TjwRj9JOBMfH
-# EeIieDoYDzIwMjIwOTAyMDgwNjI5WjADAgEeoIGGpIGDMIGAMQswCQYDVQQGEwJV
+# BgUrDgMCGgUABBTo8Vv+bC4kKfKQGic0nwI/V7M5ZAIUJLCzsEqimNwdn4DCa9PI
+# 28cNiKwYDzIwMjMwMTE4MTgwMDM1WjADAgEeoIGGpIGDMIGAMQswCQYDVQQGEwJV
 # UzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFu
 # dGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBUaW1l
 # U3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQewWx1EloUUT3
@@ -1953,13 +1967,13 @@ return
 # HzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNVBAMTH1N5bWFu
 # dGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEjBCJBTRIwCwYJ
 # YIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRABBDAcBgkqhkiG
-# 9w0BCQUxDxcNMjIwOTAyMDgwNjI5WjAvBgkqhkiG9w0BCQQxIgQgwhP+qplwOTgf
-# pp0YTprQBzgP5o5Y+m6dNGVGOMt1+7UwNwYLKoZIhvcNAQkQAi8xKDAmMCQwIgQg
+# 9w0BCQUxDxcNMjMwMTE4MTgwMDM1WjAvBgkqhkiG9w0BCQQxIgQgbDHfnHalR5p4
+# 88d1dLUArYEgcqVWw4Mv1TwlgqjQWvcwNwYLKoZIhvcNAQkQAi8xKDAmMCQwIgQg
 # xHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZIhvcNAQEBBIIB
-# AKjfZazCX/o3ep3swvYTnR7r9dRiUzhUpjJESrtIAmjNRfVIgtHHsZAWFsnMv35t
-# WgHtyzTqTzOucZqwXwbmN4UXNWQvIb67rBJzv9zl7PP781lmgiEKHinSsT4szBuf
-# rx7ATKN0RuL50gV1AkHq3ULGibiUaZ2Qx1t3RCJaYKFXO9vI13XvP1FF+9iDrurv
-# +NxScZdZf25oh8Mav8kva+D8ydrhGzG2Y9wpjYllVQ61NnJT0fXg/XYRncvxib1z
-# kiKD0yUwTpVbyLpO7UrGT5ktsxUWZKkTxhJHswkH4OwlW8k1amDE62I/8OwCq5+7
-# 4jlbKsY3tSQtJbPMlbCkbcs=
+# AFYjZWCQWd8k5lrLEEkIIlLCdqYBmHGAPAwl1fhfVLgMpbRj5H88X2rYrWlwg9Nl
+# 2IWWOuoV9Ocxdp5h/pYQ1roaQCXE5CwyD84Jq8QJqHzxmJb8rh93bpfVbmwvS8yZ
+# cahN799EAF/Aen0oED8L2B+OT5Boqchc9TqAG5pjP3lyaM+61CJqcftm9Ra+SJUd
+# O8eylV76EB/C2ZdRUUMz0zEiIl1C/d9Z+SYlui/vtOIdJYwXIQ2EpTU0je5s9UYc
+# BhDYF8cj6gkkIDyK/1KGQoPevZMaSE8qkhzeLLzjBnDeyWsCH+pW31+bbGxus06J
+# FPCV8LVdIDtRhM/SM5txBj8=
 # SIG # End signature block
