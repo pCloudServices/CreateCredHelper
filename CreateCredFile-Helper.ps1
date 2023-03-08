@@ -23,7 +23,7 @@ $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "2.3"
+$ScriptVersion = "2.4"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -818,10 +818,18 @@ Function Find-Components
 						{
 							Write-LogMessage -Type "Info" -MSG "Found AIM installation"
 							$AIMPath = $componentPath.Replace("/mode SERVICE","").Replace("AppProvider.exe","").Replace('"',"").Trim()
+                            $ConfigPath = (Join-Path -Path $AIMPath -ChildPath "Vault\Vault.ini")
 							$fileVersion = Get-FileVersion "$AIMPath\AppProvider.exe"
-                            $ComponentUser = @()
-                            $ConfigPath = ""
-                            $ServiceLogs = @()
+                            $serviceLogsOldTrace = @(Join-Path -Path $AIMPath -ChildPath "Logs\old\APPTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
+                            $serviceLogsOldConsole = @(Join-Path -Path $AIMPath -ChildPath "Logs\old\APPConsole.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
+                            $ServiceLogsMain = @(Join-Path -Path $AIMPath -ChildPath "Logs\APPTrace.log")
+                            $ServiceLogs = $ServiceLogsMain + $serviceLogsOldTrace + $serviceLogsOldConsole
+                            #Create New Fresh Cred File, it will not overwrite an existing one, this is just incase there was no cred to begin with.
+                            New-Item (Join-Path -Path $AIMPath -ChildPath "Vault\AppProviderUser.cred") -ErrorAction SilentlyContinue | Get-Acl | Set-Acl (Join-Path -Path $AIMPath -ChildPath "Vault\Vault.ini")
+                            $appFilePath = (Join-Path -Path $AIMPath -ChildPath "Vault\AppProviderUser.cred")
+                            if (Test-Path $appFilePath){
+                                $ComponentUser = @($appFilePath)
+                            }
                             $myObject = New-Object PSObject -Property @{Name="AIM";DisplayName="CyberArk Application Password Provider (AIM)";
                                                                         ServiceName=$REGKEY_AIMSERVICE;Path=$AIMPath;Version=$fileVersion;
                                                                         ComponentUser=$ComponentUser;ConfigPath=$ConfigPath;ServiceLogs=$ServiceLogs}
@@ -874,7 +882,7 @@ Function Set-PVWAURL{
     [CmdletBinding()]
     param (
         [Parameter(Mandatory=$true)]
-        [ValidateSet("PVWA","CPM","PSM")]
+        [ValidateSet("PVWA","CPM","PSM","AIM")]
         [string]$ComponentID,
         [Parameter(Mandatory=$False)]
         [string]$ConfigPath,
@@ -898,10 +906,11 @@ Function Set-PVWAURL{
                     # In case there is more than one address, get the first one
                     $PVWAurl = ($GetPVWAStringURL.PasswordVaultConfiguration.General.ApplicationRoot).Split(",")[0]
                     # Check that the PVWAUrl contains a URL and not IP
+                    # if false, URL contains IP and we need to prompt for user input.
                     $foundConfig = ($PVWAurl -NotMatch "\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
                 }
                 else {
-                    Write-LogMessage -type Warning -Msg "Error reading the configuration file"
+                    Write-LogMessage -type Warning -Msg "Error reading the configuration file $($ConfigPath)"
                 }
             }
             if ($ComponentID -eq "CPM"){
@@ -909,7 +918,7 @@ Function Set-PVWAURL{
                     # In case there is more than one address, get the first one
                     $GetPVWAStringURL = ((Get-Content $ConfigPath | Where-Object {$_ -match "Addresses" }).Split("=")[1]).Split(",")[0]
                 } catch {
-                    Write-LogMessage -type Error -MSG "There was an error finding PVWA Address from CPM configuration file"
+                    Write-LogMessage -type Error -MSG "There was an error finding PVWA Address from vault.ini configuration file"
                     $GetPVWAStringURL = $null
                 }
                 If(![string]::IsNullOrEmpty($GetPVWAStringURL)){
@@ -917,11 +926,46 @@ Function Set-PVWAURL{
                     $foundConfig = $true
                 }
             }
+            if ($ComponentID -eq "AIM"){
+                try{
+                    # In case there is more than one address, get the first one
+                    $GetPVWAStringURL = ((Get-Content $ConfigPath | Where-Object {$_ -match "Address" }).Split("=")[1]).Split(",")[0]
+
+                    # if false, URL contains IP and we need to prompt for user input.
+                    $foundConfig = ($GetPVWAStringURL -NotMatch "\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
+
+                    # In case of AIM there is no PVWA record anywhere, but we can determine if vault address is DNS type and has pcloud pattern and convert it to PVWA from it.
+                    if (($foundConfig -eq $true) -and (-not([string]::IsNullOrEmpty($GetPVWAStringURL)))){
+                        # URL exists and is DNS type, let's check if its pcloud pattern
+                        if (($GetPVWAStringURL -like "vault-*.cyberark.com") -or ($_ -like "*vault-*.cyberark.cloud")){
+                            # grab first subdomain and trim vault- from it.
+                            $portalSubDomainURL = $GetPVWAStringURL.split(".")[0].TrimStart("vault-")
+                        }
+                        Else{
+                            # set $foundConfig to false in case this is non pcloud tenant so it prompts user to enter PVWA again
+                            $foundConfig = $False
+                         }
+                        # Check if standard or shared services implementation.
+                        if($GetPVWAStringURL -like "*.cyberark.com"){
+                            # standard
+                            $script:PVWAurl = "https://$portalSubDomainURL.privilegecloud.cyberark.com"
+                        }
+                        Elseif($GetPVWAStringURL -like "*.cyberark.cloud"){
+                            # ISPSS
+                            $script:PVWAurl = "https://$portalSubDomainURL.privilegecloud.cyberark.cloud"
+                        }
+                    }
+                } catch {
+                    Write-LogMessage -type Error -MSG "There was an error finding PVWA Address from vault.ini configuration file"
+                    $GetPVWAStringURL = $null
+                }
+            }
         }
         # We Couldn't find PVWA URL so we prompt the user
         if(($foundConfig -eq $False) -or ([string]::IsNullOrEmpty($PVWAurl)))
         {
-            $PVWAurl = (Read-Host "Enter your Portal URL (eg; 'https://mikeb.privilegecloud.cyberark.com')")
+            Write-LogMessage -type Info -MSG "Couldn't retrieve portal URL from configuration file, let's type it manually:"
+            $PVWAurl = (Read-Host "Enter your Portal URL (eg; 'https://mikeb.privilegecloud.cyberark.com' or https://mikeb.privilegecloud.cyberark.cloud)")
         }
 		
 		# Let user confirm this is the correct URL, otherwise, enter manually
@@ -1520,6 +1564,9 @@ Function Invoke-GenerateCredFile
                 # Run the CreateCredFile command
                 & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType "PSMApp" /DPAPIMachineProtection /EntropyFile /ExePath $(Join-Path -Path $ComponentPath -ChildPath "CAPSM.exe") /Hostname /IpAddress
             }
+            elseif ($ComponentID -eq "AIM") {
+                & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /DPAPIMachineProtection /EntropyFile /Hostname /IpAddress
+            }
         } Else {
             $appType = $ComponentID
             If($ComponentID -eq "PSM") { $appType = "PSMApp" }
@@ -1803,10 +1850,10 @@ try{
 Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
 # SIG # Begin signature block
-# MIIgTQYJKoZIhvcNAQcCoIIgPjCCIDoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIgTgYJKoZIhvcNAQcCoIIgPzCCIDsCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBj3GBxyR1O1NEV
-# sbp2ypbEc/VG+W1vVVj0GnjcLc08N6CCDl8wggboMIIE0KADAgECAhB3vQ4Ft1kL
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDJjfmlXBM5t4/C
+# SS1+rXiommMII+bzij7X5+VCK4tOwaCCDl8wggboMIIE0KADAgECAhB3vQ4Ft1kL
 # th1HYVMeP3XtMA0GCSqGSIb3DQEBCwUAMFMxCzAJBgNVBAYTAkJFMRkwFwYDVQQK
 # ExBHbG9iYWxTaWduIG52LXNhMSkwJwYDVQQDEyBHbG9iYWxTaWduIENvZGUgU2ln
 # bmluZyBSb290IFI0NTAeFw0yMDA3MjgwMDAwMDBaFw0zMDA3MjgwMDAwMDBaMFwx
@@ -1883,97 +1930,97 @@ return
 # l418MFn4EPQUqxB51SMihIcyqu6+3qOlco8Dsy1y0gC0Hcx+unDZPsN8k+rhueN2
 # HXrPkAJ2bsEJd7adPy423FKbA7bRCOc6dWOFH1OGANfEG0Rjw9RfcsI84OkKpQ7R
 # XldpKIcWuaYMlfYzsl+P8dJru+KgA8Vh7GTVb5USzFGeMyOMtyr1/L2bIyRVSiLL
-# 8goMl4DTDOWeMYIRRDCCEUACAQEwbDBcMQswCQYDVQQGEwJCRTEZMBcGA1UEChMQ
+# 8goMl4DTDOWeMYIRRTCCEUECAQEwbDBcMQswCQYDVQQGEwJCRTEZMBcGA1UEChMQ
 # R2xvYmFsU2lnbiBudi1zYTEyMDAGA1UEAxMpR2xvYmFsU2lnbiBHQ0MgUjQ1IEVW
 # IENvZGVTaWduaW5nIENBIDIwMjACDHBNxPwWOpXgXVV8DDANBglghkgBZQMEAgEF
 # AKB8MBAGCisGAQQBgjcCAQwxAjAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEE
-# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCBg
-# yMtnbGsJNzTskj9aliprz+I7C+Szc6WBmkyUaOhoDjANBgkqhkiG9w0BAQEFAASC
-# AgAVb4jniWkphfKGbENJnZPW6NHElCNexC84g1/9xofbbqktl3FcFs3Gux3tMa7v
-# u5FkmnHOT0Ls9wfDFG1g0fevTlxrF3jVJf2mp5UU6EdK47bj6UJ3Aq6Gr7xpS9Ax
-# jyC4O/vQ7kNEm+FoUpJEoT4IzoDGY4KnGMmmBW2ImJZGQt+fx8mGFZ3EsKI4rf7U
-# knr954nFan5zKnd4WxNmBLX2ZicbcXotKLoaRhnhVWzIk75MyqPgy6cQgcjjTG9p
-# yjaoRxH2E8MkpoOJfRdWYzgAb5JbPwBH+l1bREI7Fu5KkgsMPWNYJ6AmHi4Me7Pb
-# 2CnQs0UvNZs6V0I9qh2YaHQY18e3FWLiCU0aOTO4ZcP11eE7hwnKopItruQ8uEJo
-# FCRCSV9u/iEjkNAetP8P6E49xJLb6iYk3ZhD7H8Q6+OUObIJ0h7yZhCwfN308B2d
-# j2Jn0UZXSAnHAL6E3sNfWdEwvb8YGy0KW+MlsBcvISDKczWD35W1dhfjQXjCya3C
-# hgqJAtxUc7bEN0rWvn681pvVUnHJNgOHEr1giIFOsrTHTFc5zOMb67Ah4fGBSM07
-# cf41yp2xk+sRbhUWd8HI2oFRwYGdQMVDsaKZTtdfCz1Jvz+i8xpJCCmm4GQCY97+
-# u7L0rARO3sdrTqJF7oiL8/w2TevdMhx0ftQbp21JMpNkJaGCDiswgg4nBgorBgEE
-# AYI3AwMBMYIOFzCCDhMGCSqGSIb3DQEHAqCCDgQwgg4AAgEDMQ0wCwYJYIZIAWUD
-# BAIBMIH+BgsqhkiG9w0BCRABBKCB7gSB6zCB6AIBAQYLYIZIAYb4RQEHFwMwITAJ
-# BgUrDgMCGgUABBTo8Vv+bC4kKfKQGic0nwI/V7M5ZAIUJLCzsEqimNwdn4DCa9PI
-# 28cNiKwYDzIwMjMwMTE4MTgwMDM1WjADAgEeoIGGpIGDMIGAMQswCQYDVQQGEwJV
-# UzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFu
-# dGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBUaW1l
-# U3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQewWx1EloUUT3
-# yYnSnBmdEjANBgkqhkiG9w0BAQsFADCBvTELMAkGA1UEBhMCVVMxFzAVBgNVBAoT
-# DlZlcmlTaWduLCBJbmMuMR8wHQYDVQQLExZWZXJpU2lnbiBUcnVzdCBOZXR3b3Jr
-# MTowOAYDVQQLEzEoYykgMjAwOCBWZXJpU2lnbiwgSW5jLiAtIEZvciBhdXRob3Jp
-# emVkIHVzZSBvbmx5MTgwNgYDVQQDEy9WZXJpU2lnbiBVbml2ZXJzYWwgUm9vdCBD
-# ZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTAeFw0xNjAxMTIwMDAwMDBaFw0zMTAxMTEy
-# MzU5NTlaMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3Jh
-# dGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEoMCYGA1UEAxMf
-# U3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQTCCASIwDQYJKoZIhvcNAQEB
-# BQADggEPADCCAQoCggEBALtZnVlVT52Mcl0agaLrVfOwAa08cawyjwVrhponADKX
-# ak3JZBRLKbvC2Sm5Luxjs+HPPwtWkPhiG37rpgfi3n9ebUA41JEG50F8eRzLy60b
-# v9iVkfPw7mz4rZY5Ln/BJ7h4OcWEpe3tr4eOzo3HberSmLU6Hx45ncP0mqj0hOHE
-# 0XxxxgYptD/kgw0mw3sIPk35CrczSf/KO9T1sptL4YiZGvXA6TMU1t/HgNuR7v68
-# kldyd/TNqMz+CfWTN76ViGrF3PSxS9TO6AmRX7WEeTWKeKwZMo8jwTJBG1kOqT6x
-# zPnWK++32OTVHW0ROpL2k8mc40juu1MO1DaXhnjFoTcCAwEAAaOCAXcwggFzMA4G
-# A1UdDwEB/wQEAwIBBjASBgNVHRMBAf8ECDAGAQH/AgEAMGYGA1UdIARfMF0wWwYL
-# YIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0cHM6Ly9kLnN5bWNiLmNvbS9j
-# cHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5bWNiLmNvbS9ycGEwLgYIKwYB
-# BQUHAQEEIjAgMB4GCCsGAQUFBzABhhJodHRwOi8vcy5zeW1jZC5jb20wNgYDVR0f
-# BC8wLTAroCmgJ4YlaHR0cDovL3Muc3ltY2IuY29tL3VuaXZlcnNhbC1yb290LmNy
-# bDATBgNVHSUEDDAKBggrBgEFBQcDCDAoBgNVHREEITAfpB0wGzEZMBcGA1UEAxMQ
-# VGltZVN0YW1wLTIwNDgtMzAdBgNVHQ4EFgQUr2PWyqNOhXLgp7xB8ymiOH+AdWIw
-# HwYDVR0jBBgwFoAUtnf6aUhHn1MS1cLqBzJ2B9GXBxkwDQYJKoZIhvcNAQELBQAD
-# ggEBAHXqsC3VNBlcMkX+DuHUT6Z4wW/X6t3cT/OhyIGI96ePFeZAKa3mXfSi2VZk
-# hHEwKt0eYRdmIFYGmBmNXXHy+Je8Cf0ckUfJ4uiNA/vMkC/WCmxOM+zWtJPITJBj
-# SDlAIcTd1m6JmDy1mJfoqQa3CcmPU1dBkC/hHk1O3MoQeGxCbvC2xfhhXFL1TvZr
-# jfdKer7zzf0D19n2A6gP41P3CnXsxnUuqmaFBJm3+AZX4cYO9uiv2uybGB+queM6
-# AL/OipTLAduexzi7D1Kr0eOUA2AKTaD+J20UMvw/l0Dhv5mJ2+Q5FL3a5NPD6ita
-# s5VYVQR9x5rsIwONhSrS/66pYYEwggVLMIIEM6ADAgECAhB71OWvuswHP6EBIwQi
-# QU0SMA0GCSqGSIb3DQEBCwUAMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1h
-# bnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29y
-# azEoMCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQTAeFw0x
-# NzEyMjMwMDAwMDBaFw0yOTAzMjIyMzU5NTlaMIGAMQswCQYDVQQGEwJVUzEdMBsG
-# A1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRy
-# dXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBp
-# bmcgU2lnbmVyIC0gRzMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCv
-# Doqq+Ny/aXtUF3FHCb2NPIH4dBV3Z5Cc/d5OAp5LdvblNj5l1SQgbTD53R2D6T8n
-# SjNObRaK5I1AjSKqvqcLG9IHtjy1GiQo+BtyUT3ICYgmCDr5+kMjdUdwDLNfW48I
-# HXJIV2VNrwI8QPf03TI4kz/lLKbzWSPLgN4TTfkQyaoKGGxVYVfR8QIsxLWr8mwj
-# 0p8NDxlsrYViaf1OhcGKUjGrW9jJdFLjV2wiv1V/b8oGqz9KtyJ2ZezsNvKWlYEm
-# LP27mKoBONOvJUCbCVPwKVeFWF7qhUhBIYfl3rTTJrJ7QFNYeY5SMQZNlANFxM48
-# A+y3API6IsW0b+XvsIqbAgMBAAGjggHHMIIBwzAMBgNVHRMBAf8EAjAAMGYGA1Ud
-# IARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0cHM6Ly9kLnN5
-# bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5bWNiLmNvbS9y
-# cGEwQAYDVR0fBDkwNzA1oDOgMYYvaHR0cDovL3RzLWNybC53cy5zeW1hbnRlYy5j
-# b20vc2hhMjU2LXRzcy1jYS5jcmwwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgwDgYD
-# VR0PAQH/BAQDAgeAMHcGCCsGAQUFBwEBBGswaTAqBggrBgEFBQcwAYYeaHR0cDov
-# L3RzLW9jc3Aud3Muc3ltYW50ZWMuY29tMDsGCCsGAQUFBzAChi9odHRwOi8vdHMt
-# YWlhLndzLnN5bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNlcjAoBgNVHREEITAf
-# pB0wGzEZMBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtNjAdBgNVHQ4EFgQUpRMBqZ+F
-# zBtuFh5fOzGqeTYAex0wHwYDVR0jBBgwFoAUr2PWyqNOhXLgp7xB8ymiOH+AdWIw
-# DQYJKoZIhvcNAQELBQADggEBAEaer/C4ol+imUjPqCdLIc2yuaZycGMv41UpezlG
-# Tud+ZQZYi7xXipINCNgQujYk+gp7+zvTYr9KlBXmgtuKVG3/KP5nz3E/5jMJ2aJZ
-# EPQeSv5lzN7Ua+NSKXUASiulzMub6KlN97QXWZJBw7c/hub2wH9EPEZcF1rjpDvV
-# aSbVIX3hgGd+Yqy3Ti4VmuWcI69bEepxqUH5DXk4qaENz7Sx2j6aescixXTN30cJ
-# hsT8kSWyG5bphQjo3ep0YG5gpVZ6DchEWNzm+UgUnuW/3gC9d7GYFHIUJN/HESwf
-# AD/DSxTGZxzMHgajkF9cVIs+4zNbgg/Ft4YCTnGf6WZFP3YxggJaMIICVgIBATCB
-# izB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24x
-# HzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNVBAMTH1N5bWFu
-# dGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEjBCJBTRIwCwYJ
-# YIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRABBDAcBgkqhkiG
-# 9w0BCQUxDxcNMjMwMTE4MTgwMDM1WjAvBgkqhkiG9w0BCQQxIgQgbDHfnHalR5p4
-# 88d1dLUArYEgcqVWw4Mv1TwlgqjQWvcwNwYLKoZIhvcNAQkQAi8xKDAmMCQwIgQg
-# xHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZIhvcNAQEBBIIB
-# AFYjZWCQWd8k5lrLEEkIIlLCdqYBmHGAPAwl1fhfVLgMpbRj5H88X2rYrWlwg9Nl
-# 2IWWOuoV9Ocxdp5h/pYQ1roaQCXE5CwyD84Jq8QJqHzxmJb8rh93bpfVbmwvS8yZ
-# cahN799EAF/Aen0oED8L2B+OT5Boqchc9TqAG5pjP3lyaM+61CJqcftm9Ra+SJUd
-# O8eylV76EB/C2ZdRUUMz0zEiIl1C/d9Z+SYlui/vtOIdJYwXIQ2EpTU0je5s9UYc
-# BhDYF8cj6gkkIDyK/1KGQoPevZMaSE8qkhzeLLzjBnDeyWsCH+pW31+bbGxus06J
-# FPCV8LVdIDtRhM/SM5txBj8=
+# MBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCt
+# zgOf7F4RK3He17a1edg4OtZ5l1kzcjP64/dV6hTnQTANBgkqhkiG9w0BAQEFAASC
+# AgB8htUlOeJE1GAgV5qfiGhVy9emxi+D+A56PbTAApYydfsRx96Y7+gqcxBK0P0C
+# vnQ6zvTMvGbzmssq8GRJnsGJKug5M0egmVFhfuRGh9raoGf/UkKLMwEcvTi7zC/M
+# JpPkZXPWr+gDAVMUz3Nf4fuhVsFWYf/QXwcEt1mAzfT+BE1QKKcyW10OqJN9R9D5
+# OdpwgheDs7bRTZT79urpZIuKwebFpgIHKlpRb4gGHAgVxEpwwbowe34MPyfy7jsg
+# wGyO3A15HyiT/S7wPSavnth7SEdbXmwDZFLwMoi7rNFaXWldl6xcJjoeVpiLeHrD
+# WeAbTxqUBE7o/ZpzpcX+H20Qsm8yvFuxeYU7ZIodWlhJQhP7R5CqHIxOca/mQTK0
+# s4cJN84O94qnuK6xkIaIjvN9Nu1+sHWkYSF2I+IJqWFPo7/ZyPzf1JKSmwlEtJ74
+# R0F7mrSMGvEE6zW8mS48ZMbAA1PsmUIB1069yVuDA5gbjcAprpi/A251/gtkhVje
+# Fw+f4IOpKZTBWLt7zS9tg4ZhGArQqhGGGonI3vsd2Mrgh9GrD8M0Ve/DOGC4U28c
+# r7JVlqbHPwB+i8CTBX1KoesZ43imgiH6ufifzdpSD6GmKmnyOdECkI6Y254f+z8e
+# 5y91vB02is2D6Xxbs7/xws7dLuw2y3ofWWA4t15l/sCoNaGCDiwwgg4oBgorBgEE
+# AYI3AwMBMYIOGDCCDhQGCSqGSIb3DQEHAqCCDgUwgg4BAgEDMQ0wCwYJYIZIAWUD
+# BAIBMIH/BgsqhkiG9w0BCRABBKCB7wSB7DCB6QIBAQYLYIZIAYb4RQEHFwMwITAJ
+# BgUrDgMCGgUABBQGIkuFNVREeGNL0a7PzlvE1U4UZQIVAMqZGnRG/JfCBCLerVav
+# gVwK2oHDGA8yMDIzMDMwODE4MTkwOVowAwIBHqCBhqSBgzCBgDELMAkGA1UEBhMC
+# VVMxHTAbBgNVBAoTFFN5bWFudGVjIENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1h
+# bnRlYyBUcnVzdCBOZXR3b3JrMTEwLwYDVQQDEyhTeW1hbnRlYyBTSEEyNTYgVGlt
+# ZVN0YW1waW5nIFNpZ25lciAtIEczoIIKizCCBTgwggQgoAMCAQICEHsFsdRJaFFE
+# 98mJ0pwZnRIwDQYJKoZIhvcNAQELBQAwgb0xCzAJBgNVBAYTAlVTMRcwFQYDVQQK
+# Ew5WZXJpU2lnbiwgSW5jLjEfMB0GA1UECxMWVmVyaVNpZ24gVHJ1c3QgTmV0d29y
+# azE6MDgGA1UECxMxKGMpIDIwMDggVmVyaVNpZ24sIEluYy4gLSBGb3IgYXV0aG9y
+# aXplZCB1c2Ugb25seTE4MDYGA1UEAxMvVmVyaVNpZ24gVW5pdmVyc2FsIFJvb3Qg
+# Q2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMTYwMTEyMDAwMDAwWhcNMzEwMTEx
+# MjM1OTU5WjB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9y
+# YXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNVBAMT
+# H1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0EwggEiMA0GCSqGSIb3DQEB
+# AQUAA4IBDwAwggEKAoIBAQC7WZ1ZVU+djHJdGoGi61XzsAGtPHGsMo8Fa4aaJwAy
+# l2pNyWQUSym7wtkpuS7sY7Phzz8LVpD4Yht+66YH4t5/Xm1AONSRBudBfHkcy8ut
+# G7/YlZHz8O5s+K2WOS5/wSe4eDnFhKXt7a+Hjs6Nx23q0pi1Oh8eOZ3D9Jqo9ITh
+# xNF8ccYGKbQ/5IMNJsN7CD5N+Qq3M0n/yjvU9bKbS+GImRr1wOkzFNbfx4Dbke7+
+# vJJXcnf0zajM/gn1kze+lYhqxdz0sUvUzugJkV+1hHk1inisGTKPI8EyQRtZDqk+
+# scz51ivvt9jk1R1tETqS9pPJnONI7rtTDtQ2l4Z4xaE3AgMBAAGjggF3MIIBczAO
+# BgNVHQ8BAf8EBAMCAQYwEgYDVR0TAQH/BAgwBgEB/wIBADBmBgNVHSAEXzBdMFsG
+# C2CGSAGG+EUBBxcDMEwwIwYIKwYBBQUHAgEWF2h0dHBzOi8vZC5zeW1jYi5jb20v
+# Y3BzMCUGCCsGAQUFBwICMBkaF2h0dHBzOi8vZC5zeW1jYi5jb20vcnBhMC4GCCsG
+# AQUFBwEBBCIwIDAeBggrBgEFBQcwAYYSaHR0cDovL3Muc3ltY2QuY29tMDYGA1Ud
+# HwQvMC0wK6ApoCeGJWh0dHA6Ly9zLnN5bWNiLmNvbS91bml2ZXJzYWwtcm9vdC5j
+# cmwwEwYDVR0lBAwwCgYIKwYBBQUHAwgwKAYDVR0RBCEwH6QdMBsxGTAXBgNVBAMT
+# EFRpbWVTdGFtcC0yMDQ4LTMwHQYDVR0OBBYEFK9j1sqjToVy4Ke8QfMpojh/gHVi
+# MB8GA1UdIwQYMBaAFLZ3+mlIR59TEtXC6gcydgfRlwcZMA0GCSqGSIb3DQEBCwUA
+# A4IBAQB16rAt1TQZXDJF/g7h1E+meMFv1+rd3E/zociBiPenjxXmQCmt5l30otlW
+# ZIRxMCrdHmEXZiBWBpgZjV1x8viXvAn9HJFHyeLojQP7zJAv1gpsTjPs1rSTyEyQ
+# Y0g5QCHE3dZuiZg8tZiX6KkGtwnJj1NXQZAv4R5NTtzKEHhsQm7wtsX4YVxS9U72
+# a433Snq+8839A9fZ9gOoD+NT9wp17MZ1LqpmhQSZt/gGV+HGDvbor9rsmxgfqrnj
+# OgC/zoqUywHbnsc4uw9Sq9HjlANgCk2g/idtFDL8P5dA4b+ZidvkORS92uTTw+or
+# WrOVWFUEfcea7CMDjYUq0v+uqWGBMIIFSzCCBDOgAwIBAgIQe9Tlr7rMBz+hASME
+# IkFNEjANBgkqhkiG9w0BAQsFADB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3lt
+# YW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdv
+# cmsxKDAmBgNVBAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0EwHhcN
+# MTcxMjIzMDAwMDAwWhcNMjkwMzIyMjM1OTU5WjCBgDELMAkGA1UEBhMCVVMxHTAb
+# BgNVBAoTFFN5bWFudGVjIENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBU
+# cnVzdCBOZXR3b3JrMTEwLwYDVQQDEyhTeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1w
+# aW5nIFNpZ25lciAtIEczMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA
+# rw6Kqvjcv2l7VBdxRwm9jTyB+HQVd2eQnP3eTgKeS3b25TY+ZdUkIG0w+d0dg+k/
+# J0ozTm0WiuSNQI0iqr6nCxvSB7Y8tRokKPgbclE9yAmIJgg6+fpDI3VHcAyzX1uP
+# CB1ySFdlTa8CPED39N0yOJM/5Sym81kjy4DeE035EMmqChhsVWFX0fECLMS1q/Js
+# I9KfDQ8ZbK2FYmn9ToXBilIxq1vYyXRS41dsIr9Vf2/KBqs/SrcidmXs7DbylpWB
+# Jiz9u5iqATjTryVAmwlT8ClXhVhe6oVIQSGH5d600yaye0BTWHmOUjEGTZQDRcTO
+# PAPstwDyOiLFtG/l77CKmwIDAQABo4IBxzCCAcMwDAYDVR0TAQH/BAIwADBmBgNV
+# HSAEXzBdMFsGC2CGSAGG+EUBBxcDMEwwIwYIKwYBBQUHAgEWF2h0dHBzOi8vZC5z
+# eW1jYi5jb20vY3BzMCUGCCsGAQUFBwICMBkaF2h0dHBzOi8vZC5zeW1jYi5jb20v
+# cnBhMEAGA1UdHwQ5MDcwNaAzoDGGL2h0dHA6Ly90cy1jcmwud3Muc3ltYW50ZWMu
+# Y29tL3NoYTI1Ni10c3MtY2EuY3JsMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMIMA4G
+# A1UdDwEB/wQEAwIHgDB3BggrBgEFBQcBAQRrMGkwKgYIKwYBBQUHMAGGHmh0dHA6
+# Ly90cy1vY3NwLndzLnN5bWFudGVjLmNvbTA7BggrBgEFBQcwAoYvaHR0cDovL3Rz
+# LWFpYS53cy5zeW1hbnRlYy5jb20vc2hhMjU2LXRzcy1jYS5jZXIwKAYDVR0RBCEw
+# H6QdMBsxGTAXBgNVBAMTEFRpbWVTdGFtcC0yMDQ4LTYwHQYDVR0OBBYEFKUTAamf
+# hcwbbhYeXzsxqnk2AHsdMB8GA1UdIwQYMBaAFK9j1sqjToVy4Ke8QfMpojh/gHVi
+# MA0GCSqGSIb3DQEBCwUAA4IBAQBGnq/wuKJfoplIz6gnSyHNsrmmcnBjL+NVKXs5
+# Rk7nfmUGWIu8V4qSDQjYELo2JPoKe/s702K/SpQV5oLbilRt/yj+Z89xP+YzCdmi
+# WRD0Hkr+Zcze1GvjUil1AEorpczLm+ipTfe0F1mSQcO3P4bm9sB/RDxGXBda46Q7
+# 1Wkm1SF94YBnfmKst04uFZrlnCOvWxHqcalB+Q15OKmhDc+0sdo+mnrHIsV0zd9H
+# CYbE/JElshuW6YUI6N3qdGBuYKVWeg3IRFjc5vlIFJ7lv94AvXexmBRyFCTfxxEs
+# HwA/w0sUxmcczB4Go5BfXFSLPuMzW4IPxbeGAk5xn+lmRT92MYICWjCCAlYCAQEw
+# gYswdzELMAkGA1UEBhMCVVMxHTAbBgNVBAoTFFN5bWFudGVjIENvcnBvcmF0aW9u
+# MR8wHQYDVQQLExZTeW1hbnRlYyBUcnVzdCBOZXR3b3JrMSgwJgYDVQQDEx9TeW1h
+# bnRlYyBTSEEyNTYgVGltZVN0YW1waW5nIENBAhB71OWvuswHP6EBIwQiQU0SMAsG
+# CWCGSAFlAwQCAaCBpDAaBgkqhkiG9w0BCQMxDQYLKoZIhvcNAQkQAQQwHAYJKoZI
+# hvcNAQkFMQ8XDTIzMDMwODE4MTkwOVowLwYJKoZIhvcNAQkEMSIEIFMhijCuNYse
+# GiKMrMXLMjh+P92vUufr13yfGBJ4clqoMDcGCyqGSIb3DQEJEAIvMSgwJjAkMCIE
+# IMR0znYAfQI5Tg2l5N58FMaA+eKCATz+9lPvXbcf32H4MAsGCSqGSIb3DQEBAQSC
+# AQCaqUxCBZ7D1zjEblFdG6vliPsqNx+254fQqgkm9cyAHbERYBdB94uFNFPxJoIz
+# OD1k425s+qJeHVE3MtpKbKNeH4Gwe7V9gIrYgyVv9AZzdB/dOdqJzqvAzO0b9/h2
+# gymXnU1nfRL507K6bKZ7jHa4ZtYsK23UUJ8uBk/Gv+QY84GgzarbccXJiQI7/Exx
+# N8iQYqhB8x6wsOn9iWYPDs8JFj9tIPxLOPvwZc4TyN7GLnLBlLoaaXyonvnsX6dc
+# 5yLhHVH9f5eHpBmAnTJCmb43uhdlPXW8CrylvV4TfeiNVVeURQ6DZuPHS357n17X
+# 75wJkHku5PsGlQfGF7gtuTLb
 # SIG # End signature block
