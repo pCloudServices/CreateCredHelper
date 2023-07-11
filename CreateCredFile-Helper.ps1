@@ -15,15 +15,15 @@ param(
     [ValidateSet("cyberark","ldap")]
     [string]$AuthType = "cyberark",
     [Parameter(Mandatory=$false)]
-    [Switch]
-    $SkipVersionCheck
+    [Switch]$SkipVersionCheck,
+    [switch]$skipTLS
 )
 
 $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "2.5"
+$ScriptVersion = "2.7"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1380,7 +1380,7 @@ if(($GetTLS -ne $true) -or ($GetTLSReg86 -ne $true) -or ($GetTLSReg64 -ne $true)
     Write-LogMessage -type Info -MSG "Detected TLS12 is not enforced, enforcing it via registry"
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value '1' -Type DWord -Force -Verbose
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value '1' -Type DWord -Force -Verbose
-    Write-LogMessage -type Info -MSG "Please restart powershell to complete TLS12 settings."
+    Write-LogMessage -type Info -MSG "Please restart powershell to complete TLS12 settings. If this error keeps repeating, rerun the script with -skipTLS flag"
     Pause
     Stop-Process $PID
 }
@@ -1813,7 +1813,7 @@ If ($(Test-CurrentUserLocalAdmin) -eq $False)
 try{
     
     # Ignore SSL Cert issues
-    IgnoreCert
+    if(-not($skipTLS)){IgnoreCert}
 
     #Create A Dynamic Menu based on the services found
     $detectedComponents = $(Find-Components)
@@ -1854,11 +1854,12 @@ try{
 # Script ended
 Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
+
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAan/SQU9alFStL
-# r7gxe7trZXsby95fPIHhOfuDjlHrGKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDC+5F8QLtPoQAp
+# dGIdvElbCqIEvwH6SrlCCiG5l1287aCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -1993,22 +1994,22 @@ return
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIBBeM3jB4VZMNc6iV5wQFDIgnl8L8t6qXZZ6ROAz7VtNMA0GCSqGSIb3
-# DQEBAQUABIICANTngVx5oNPr3UrpzqQQrbko72Q21guEPNynzDTrisO5Lq6TRyjb
-# E85c/u7uC4r6m8j53uOVJEWdDvWvAqkdDLeQgZ0qY6OOkrJkGDUuQWBz+wYf3AbF
-# 2qE2m07PQaWhoj5PHcVtMhvr0b14ePICW6f3NPo3NdMqRULADMq0juxlJV/X8hQN
-# Oedtq9vDUbh03+NiC8jEd6C1OkKmnYiUDkfSo6a+koqEn6b3/Ahqe7EhavHwBT62
-# HcmIYuZ1WycrSQqZIG37WWYkOhFhWEUb1worL9faC3Fx1OPIIOqVNQPOyI7EuOqP
-# hKFhb42eijd9UqTmObZCXNzJfuorSRbZOczUdynjkiOBhdwJq9ggaiovNxMYZaGv
-# wHBBfuMWnMCjfH23lZOoSdC6ymeu5OTqKOcL3HTIhx7NiC+yh5MZK0OXJ4IeYNrX
-# BWmu6Sa7ELAzBwZGvQ/79rSjW2iP9ueJKFfybH+qDNYSH0ib4i+XTWXW11an7/qM
-# iBrzGVa6163utOqNpCTu8qRb2qoExKRiTGAna5W1mHtfZW+BwLD8mprm6dLhKeze
-# PGsHbu84jG35BXNwbWOdbsT6bAvaNj+BNfkDKgqVugAva72hbNCNOwhWDL98Tf7O
-# l1Lz1vk9FCBTqHkgYp6YuD3F1mO9xxJSxWBkTpHRilS47rir6BvadVNHoYIOLDCC
+# AQkEMSIEII31hP2Hn8eB53HGjI0vfClrFgCvpjQU8pCEV33twj0HMA0GCSqGSIb3
+# DQEBAQUABIICAFNGI+Kyvl24v3wGGQVAFgcyx+AHtlt6P5wtEXH+bxEaPNx1koTJ
+# JZ+iLXluV2oFVQ2j8Rx5btFPMo5uOfPAzVDh3RdCriQIgERxWkzKa1uXGVfU2yLa
+# T/GPcgEi7o0SOZDOdzWnhndA0lR3K1jvxaMAk3yXs0yiBeOddWHiJzfjAXPj0uzA
+# LCQTqWYTYgfZnf3cW6IzB6nDHmg45zPY3pfLd42hQVZ6uklSK/cv+3aO9bGW2TEQ
+# 3Ru61VCQKxhSbvValk44+uJpbFgXk7SqycF1tN2g8O28Lc5CqNYi6B5R1T3p0UMw
+# /472IKnTotcVIBixQIYAVKq6QM2RXhXmfNGdqmAElvr8WUO1XgRYMR0IONCfQb87
+# nrgkScjIMB3uYUJmI796dxzhFje0fABChq15JCfKiS+dHEMSoVdMpuEtJkV9QXit
+# E6Q5D4xyZzXraBJnuBjudH262rFAP7x7fKJouapNBTmr1seU7hoGqCS51uv0qyu6
+# ZUqNhm0RbYoa6cGBOmF9Nt2DQpdWW+P9Q71krIwugg/gnQ9u1mZRLDeCQbiQhTBF
+# g+fWZSUxz8CGvkyURSIXsicuIudSMzd7s7PkcD6DfR560HRdSy9D1qTprTfdHsAA
+# mXVxSgA5ls2zF0tTf6AV0VCXED7SuVWfLRyWrAQeYgKARZ1ORqcSk3ZIoYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFPxUlYc1kJ6S8+tAJ8pVSzi/kE/jAhUApBs+zmYq
-# cn/wBdUbDbosnz+NW/IYDzIwMjMwMzA5MjE1NjIwWjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFBeh0skY2HqrxFMN8u2ILQ2XVtR7AhUA4WHQteV1
+# 2FktppvkskQBbIiyTaUYDzIwMjMwNzExMTY0ODI2WjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -2072,13 +2073,13 @@ return
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjMwMzA5MjE1NjIwWjAvBgkqhkiG9w0BCQQxIgQg
-# mojMr528aZFDnj/I4Lu4cPpnhcVmzbFXAh+7beypS1QwNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjMwNzExMTY0ODI2WjAvBgkqhkiG9w0BCQQxIgQg
+# EtXjLnWVf1QhFgXtHtpcGWaMBLDISI8kpyUJy1s6GdswNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAJgkfYNBYN3fFUOWHewn3cd9D4WuIHf5cPus0KvdF3FIS+y5B/gI
-# M/tPCJgg55jTae56yrzWCiNY+HSR6pNei+mfCdoVpUKUBq4iFXmiNuQOrjzOq6z8
-# XaqTgmvmbXZiptbMOoWGiEfiMQOGrBARFOUyG45+AOEGhA8pYahObBCmUO0S5yE9
-# eOBKQ39x/XnG3AvGDjT0sl6rSj6P72b9fCBhFSQiQFFcGA2UgEZuNuXFb3zYS5W4
-# cV/d2qODrOphM8pGqXIUUu1XUkkYRS5ssM0BMFq8AP3EwXxj1lZyJEQmO6hYTuFm
-# oQOr1/itQwkfXt2FcJR31pZc3IQR9gFZvG0=
+# hvcNAQEBBIIBAFcieq8SvQeZlZU/aciDWq0qeGPlDWEcAXcRk7Kx5tQjFpiz1TsJ
+# Z2unHoirSsDee3LwRAi/Lqge7Vg+Hew4zabtlQXz+5ZkOzDqVlMyKaRkMjAlyBd+
+# nB5dhtlyUaA0bxR9Pp93fc6Vjq/jcSVMSpx8hH0k1olL9gCmTaN+V9i7yIYaOEyb
+# yXIWYOmAsiRA6lCemWiPax4UFNbXwAxkfUK7UdFK2VKZOr85FRy1Gxqau9WTRiH2
+# 94pS0bwbOBRkPEJXhPjaygyXx5Ve1tnfgTkYn09jB7GCRUC0VRnUp+17Wt3y9U0J
+# i5QogLDlGdnm8L6LOeEBNlNIH0PTkN51MtU=
 # SIG # End signature block
