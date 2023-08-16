@@ -23,7 +23,7 @@ $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "2.7"
+$ScriptVersion = "2.8"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -979,7 +979,9 @@ Function Set-PVWAURL{
 
         Write-LogMessage -type debug -Msg "The PVWA URL to be used is: '$PVWAurl'"
     } Catch{
-        Throw $(New-Object System.Exception ("There was an error reading the $ComponentID configuration file '$ConfigPath'",$_.Exception))
+        Write-LogMessage -type Error -MSG ("There was an error reading the $ComponentID configuration file '$ConfigPath'",$_.Exception)
+        Write-LogMessage -type Info -MSG "Couldn't retrieve portal URL from configuration file, let's type it manually:"
+        $PVWAurl = (Read-Host "Enter your Portal URL (eg; 'https://mikeb.privilegecloud.cyberark.com' or https://mikeb.privilegecloud.cyberark.cloud)")
     }
     
     # Set the PVWA URLS
@@ -1854,12 +1856,12 @@ try{
 # Script ended
 Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
-
+###########
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDC+5F8QLtPoQAp
-# dGIdvElbCqIEvwH6SrlCCiG5l1287aCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCB8DZ+mCDzWBiQS
+# UI4xyqrynhjvp1F0jrB7mid7+Oz0faCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -1994,22 +1996,22 @@ return
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEII31hP2Hn8eB53HGjI0vfClrFgCvpjQU8pCEV33twj0HMA0GCSqGSIb3
-# DQEBAQUABIICAFNGI+Kyvl24v3wGGQVAFgcyx+AHtlt6P5wtEXH+bxEaPNx1koTJ
-# JZ+iLXluV2oFVQ2j8Rx5btFPMo5uOfPAzVDh3RdCriQIgERxWkzKa1uXGVfU2yLa
-# T/GPcgEi7o0SOZDOdzWnhndA0lR3K1jvxaMAk3yXs0yiBeOddWHiJzfjAXPj0uzA
-# LCQTqWYTYgfZnf3cW6IzB6nDHmg45zPY3pfLd42hQVZ6uklSK/cv+3aO9bGW2TEQ
-# 3Ru61VCQKxhSbvValk44+uJpbFgXk7SqycF1tN2g8O28Lc5CqNYi6B5R1T3p0UMw
-# /472IKnTotcVIBixQIYAVKq6QM2RXhXmfNGdqmAElvr8WUO1XgRYMR0IONCfQb87
-# nrgkScjIMB3uYUJmI796dxzhFje0fABChq15JCfKiS+dHEMSoVdMpuEtJkV9QXit
-# E6Q5D4xyZzXraBJnuBjudH262rFAP7x7fKJouapNBTmr1seU7hoGqCS51uv0qyu6
-# ZUqNhm0RbYoa6cGBOmF9Nt2DQpdWW+P9Q71krIwugg/gnQ9u1mZRLDeCQbiQhTBF
-# g+fWZSUxz8CGvkyURSIXsicuIudSMzd7s7PkcD6DfR560HRdSy9D1qTprTfdHsAA
-# mXVxSgA5ls2zF0tTf6AV0VCXED7SuVWfLRyWrAQeYgKARZ1ORqcSk3ZIoYIOLDCC
+# AQkEMSIEILQosIcZpap6T2JjXtrfheXZrwCiQ/EHSAuG+RAjtASKMA0GCSqGSIb3
+# DQEBAQUABIICAFmJgUBdqNPjOR8yVNN/GYZtZla9kcohSGdJe7FFPq2AFv/rbZuV
+# pUFGXgOC/beusMqgXKJikIldA/Bff5kFqFlolnFiP8iEdFYVdIJonp8woqzPI0sC
+# T6zFTOzhE/FPoN9PqeYXzBEa95rdHuHWVxBGThz5a+ve/S0JeUFF+1vlewW50dCX
+# t9JiLUyYRCaFuKxVl3k7cbpFHWEZ3ksMmvOTcFbFshB03/UyqbLy9RmcB/ofW26E
+# 8lpS3JAvO7dnaJB0Y6baQXAHDx3V+L5SS8t+NIBuG3jTDqStOo/0cCS6fJRW9cON
+# yK68WkQCwnNbUSupGhd/MfQ2bSnZQbddh28x9k2EEcGmW2bJSTD7MgVHUn08dI18
+# q8ljP+XSPN/oAK8oJfn+cUOEUAh3pZUB/gm01dyKKQvMyYpy+XISUHVv8+mseNOu
+# 8D6sHIqwZ+EBfRThk+sY+eSd69YUODLpooyvlNjybEz0UktvnJzu2qLA1MdBJqpz
+# //0RcGqfMBj18mvItLXw2S+OXKFh2KgCH6srDhpdhMUv4pgkG6Aa3w7Jc1blp/Z5
+# ONUnCpa58It7f6juYTuQDpsgdw0UZBGN2qnZj0HMNaSWq4+W84TTGcL9nMn/f577
+# 38slVA0imgBj9V5Zhd0+Ix6qhSDZHvMAUu+ZMDFvOoxt3jqQfbE87BFvoYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFBeh0skY2HqrxFMN8u2ILQ2XVtR7AhUA4WHQteV1
-# 2FktppvkskQBbIiyTaUYDzIwMjMwNzExMTY0ODI2WjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFE32NUGcTEslUE1nM4Gj4iaogjMVAhUAteJogjGD
+# ruQPWMH4iNWy04ahzeQYDzIwMjMwODE2MDk1NDM2WjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -2073,13 +2075,13 @@ return
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjMwNzExMTY0ODI2WjAvBgkqhkiG9w0BCQQxIgQg
-# EtXjLnWVf1QhFgXtHtpcGWaMBLDISI8kpyUJy1s6GdswNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjMwODE2MDk1NDM2WjAvBgkqhkiG9w0BCQQxIgQg
+# Dn1eYREAX3OlfFroagv4eSq9L50UsojBvhebmYHF72wwNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAFcieq8SvQeZlZU/aciDWq0qeGPlDWEcAXcRk7Kx5tQjFpiz1TsJ
-# Z2unHoirSsDee3LwRAi/Lqge7Vg+Hew4zabtlQXz+5ZkOzDqVlMyKaRkMjAlyBd+
-# nB5dhtlyUaA0bxR9Pp93fc6Vjq/jcSVMSpx8hH0k1olL9gCmTaN+V9i7yIYaOEyb
-# yXIWYOmAsiRA6lCemWiPax4UFNbXwAxkfUK7UdFK2VKZOr85FRy1Gxqau9WTRiH2
-# 94pS0bwbOBRkPEJXhPjaygyXx5Ve1tnfgTkYn09jB7GCRUC0VRnUp+17Wt3y9U0J
-# i5QogLDlGdnm8L6LOeEBNlNIH0PTkN51MtU=
+# hvcNAQEBBIIBAHZMGX03xeq1JXn6aTN5zCxXlHpJWGvCg6nwRJlvhvXBp0w7Oq0m
+# xVMrAocsJgti+he8PEJ+izLDRJ6K77B/i5wPkdisNzlCTCNjWtNbaOgq1Copwcw3
+# 1HFdatwkKD6/3PT1nPb6W/HLHk/MuiH7GLDEpVooSt1kXNEw1tvwTTWncPJC7DZ4
+# QbOUz4u/zzGBTAysWjFpVfff0McpchP0kVRm9uJqfY/Xr5iVd5iRec1QKpLBisda
+# FTH3Th+9vvrJcAbpTrYAzvGoEe98cWhM43RR1VlmFcjcwY/iL52HpbrFtV7YSIBk
+# 03yGAv6gfhPSFnTnwwUEaBm3Ndt0bqjgsCY=
 # SIG # End signature block
