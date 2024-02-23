@@ -16,14 +16,16 @@ param(
     [string]$AuthType = "cyberark",
     [Parameter(Mandatory=$false)]
     [Switch]$SkipVersionCheck,
-    [switch]$skipTLS
+    [switch]$skipTLS,
+    [Parameter(Mandatory = $false, HelpMessage = "Specify a User that has Privilege Cloud Administrative permissions.")]
+    [PSCredential]$Credentials
 )
 
 $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "2.8"
+$ScriptVersion = "3"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -193,6 +195,29 @@ Function Join-ExceptionMessage
 	End {
 	}
 }
+
+Function Collect-ExceptionMessage {
+    param(
+        [Exception]$e
+    )
+
+    Begin {
+    }
+
+    Process {
+        $msg = "Source: {0}; Message: {1}" -f $e.Source, $e.Message
+        while ($e.InnerException) {
+            $e = $e.InnerException
+            $msg += "`n`tSource: {0}; Message: {1}" -f $e.Source, $e.Message
+        }
+        return $msg
+    }
+
+    End {
+    }
+}
+
+
 
 #endregion
 
@@ -498,10 +523,9 @@ param (
 # Parameters.....: None
 # Return Values..: 
 # =================================================================================================================================
-Function Get-Choice{
+Function Get-Choice {
     [CmdletBinding()]
-    Param
-    (
+    Param (
         [Parameter(Mandatory = $true, Position = 0)]
         $Title,
 
@@ -512,62 +536,88 @@ Function Get-Choice{
         [Parameter(Position = 2)]
         $DefaultChoice = -1
     )
-    if ($DefaultChoice -ne -1 -and ($DefaultChoice -gt $Options.Count -or $DefaultChoice -lt 1))
-    {
-        Write-Warning "DefaultChoice needs to be a value between 1 and $($Options.Count) or -1 (for none)"
-        exit
+
+    # Check if running on macOS
+    if ($IsMacOS -or ($PSVersionTable.OS -match "Unix" -and !(Test-Path Env:OS -Value "Windows_NT"))) {
+        if ($DefaultChoice -ne -1 -and ($DefaultChoice -gt $Options.Count -or $DefaultChoice -lt 0)) {
+            Write-Warning "DefaultChoice needs to be a value between 0 and $($Options.Count - 1) or -1 (for none)"
+            return
+        }
+
+        Write-Host "$Title`n"
+
+        for ($i = 0; $i -lt $Options.Length; $i++) {
+            Write-Host "$($i+1): $($Options[$i])"
+        }
+
+        $choice = $DefaultChoice
+        if ($DefaultChoice -eq -1) {
+            do {
+                $input = Read-Host "Please select an option (1-$($Options.Length))"
+                if ($input -match '^\d+$') {
+                    $choice = [int]$input - 1
+                }
+            }
+            while ($choice -lt 0 -or $choice -ge $Options.Length)
+        }
+
+        return $Options[$choice]
+    } else {
+        # Original GUI-based logic for Windows
+        if ($DefaultChoice -ne -1 -and ($DefaultChoice -gt $Options.Count -or $DefaultChoice -lt 1)) {
+            Write-Warning "DefaultChoice needs to be a value between 1 and $($Options.Count) or -1 (for none)"
+            exit
+        }
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        [System.Windows.Forms.Application]::EnableVisualStyles()
+        $script:result = ""
+        $form = New-Object System.Windows.Forms.Form
+        $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedDialog
+        $form.BackColor = [Drawing.Color]::White
+        $form.TopMost = $True
+        $form.Text = $Title
+        $form.ControlBox = $False
+        $form.StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
+        # Calculate width required based on longest option text and form title
+        $minFormWidth = 300
+        $formHeight = 44
+        $minButtonWidth = 150
+        $buttonHeight = 23
+        $buttonY = 12
+        $spacing = 10
+        $buttonWidth = [Windows.Forms.TextRenderer]::MeasureText((($Options | Sort-Object Length)[-1]), $form.Font).Width + 1
+        $buttonWidth = [Math]::Max($minButtonWidth, $buttonWidth)
+        $formWidth = [Windows.Forms.TextRenderer]::MeasureText($Title, $form.Font).Width
+        $spaceWidth = ($options.Count + 1) * $spacing
+        $formWidth = ($formWidth, $minFormWidth, ($buttonWidth * $Options.Count + $spaceWidth) | Measure-Object -Maximum).Maximum
+        $form.ClientSize = New-Object System.Drawing.Size($formWidth, $formHeight)
+        $index = 0
+        # Create the buttons dynamically based on the options
+        foreach ($option in $Options) {
+            Set-Variable "button$index" -Value (New-Object System.Windows.Forms.Button)
+            $temp = Get-Variable "button$index" -ValueOnly
+            $temp.Size = New-Object System.Drawing.Size($buttonWidth, $buttonHeight)
+            $temp.UseVisualStyleBackColor = $True
+            $temp.Text = $option
+            $buttonX = ($index + 1) * $spacing + $index * $buttonWidth
+            $temp.Add_Click({ 
+                    $script:result = $this.Text; 
+                    $form.Close() 
+                })
+            $temp.Location = New-Object System.Drawing.Point($buttonX, $buttonY)
+            $form.Controls.Add($temp)
+            $index++
+        }
+        $shownString = '$this.Activate();'
+        if ($DefaultChoice -ne -1) {
+            $shownString += '(Get-Variable "button$($DefaultChoice-1)" -ValueOnly).Focus()'
+        }
+        $shownSB = [ScriptBlock]::Create($shownString)
+        $form.Add_Shown($shownSB)
+        [void]$form.ShowDialog()
+        return $result
     }
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-    [System.Windows.Forms.Application]::EnableVisualStyles()
-    $script:result = ""
-    $form = New-Object System.Windows.Forms.Form
-    $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedDialog
-    $form.BackColor = [Drawing.Color]::White
-    $form.TopMost = $True
-    $form.Text = $Title
-    $form.ControlBox = $False
-    $form.StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
-    #calculate width required based on longest option text and form title
-    $minFormWidth = 300
-    $formHeight = 44
-    $minButtonWidth = 150
-    $buttonHeight = 23
-    $buttonY = 12
-    $spacing = 10
-    $buttonWidth = [Windows.Forms.TextRenderer]::MeasureText((($Options | Sort-Object Length)[-1]), $form.Font).Width + 1
-    $buttonWidth = [Math]::Max($minButtonWidth, $buttonWidth)
-    $formWidth = [Windows.Forms.TextRenderer]::MeasureText($Title, $form.Font).Width
-    $spaceWidth = ($options.Count + 1) * $spacing
-    $formWidth = ($formWidth, $minFormWidth, ($buttonWidth * $Options.Count + $spaceWidth) | Measure-Object -Maximum).Maximum
-    $form.ClientSize = New-Object System.Drawing.Size($formWidth, $formHeight)
-    $index = 0
-    #create the buttons dynamically based on the options
-    foreach ($option in $Options)
-    {
-        Set-Variable "button$index" -Value (New-Object System.Windows.Forms.Button)
-        $temp = Get-Variable "button$index" -ValueOnly
-        $temp.Size = New-Object System.Drawing.Size($buttonWidth, $buttonHeight)
-        $temp.UseVisualStyleBackColor = $True
-        $temp.Text = $option
-        $buttonX = ($index + 1) * $spacing + $index * $buttonWidth
-        $temp.Add_Click({ 
-                $script:result = $this.Text; 
-                $form.Close() 
-            })
-        $temp.Location = New-Object System.Drawing.Point($buttonX, $buttonY)
-        $form.Controls.Add($temp)
-        $index++
-    }
-    $shownString = '$this.Activate();'
-    if ($DefaultChoice -ne -1)
-    {
-        $shownString += '(Get-Variable "button$($DefaultChoice-1)" -ValueOnly).Focus()'
-    }
-    $shownSB = [ScriptBlock]::Create($shownString)
-    $form.Add_Shown($shownSB)
-    [void]$form.ShowDialog()
-    return $result
 }
 #endregion
 
@@ -718,7 +768,7 @@ Function Find-Components
 							Write-LogMessage -Type "Info" -MSG "Found CPM installation"
 							$cpmPath = $componentPath.Replace("Scanner\CACPMScanner.exe","").Replace("PMEngine.exe","").Replace("/SERVICE","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $cpmPath -ChildPath "Vault\Vault.ini")
-							$fileVersion = Get-FileVersion "$cpmPath\PMEngine.exe"
+							$fileVersion = [version](Get-FileVersion "$cpmPath\PMEngine.exe")
                             $serviceLogsOldTrace = @(Join-Path -Path $cpmPath -ChildPath "Logs\old\PMTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $serviceLogsOldConsole = @(Join-Path -Path $cpmPath -ChildPath "Logs\old\PMConsole.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $ServiceLogsMain = @((Join-Path -Path $cpmPath -ChildPath "Logs\PMTrace.log"),(Join-Path -Path $cpmPath -ChildPath "Logs\CACPMScanner.log"))
@@ -750,7 +800,7 @@ Function Find-Components
 						{
 							Write-LogMessage -Type "Info" -MSG "Found PVWA installation"
 							$pvwaPath = $componentPath.Replace("Services\CyberArkScheduledTasks.exe","").Replace('"',"").Trim()
-							$fileVersion = Get-FileVersion "$pvwaPath\Services\CyberArkScheduledTasks.exe"
+							$fileVersion = [version](Get-FileVersion "$pvwaPath\Services\CyberArkScheduledTasks.exe")
                             $ServiceLogs = @()
                             $ComponentUser = @()
                             $ConfigPath = ""
@@ -781,7 +831,7 @@ Function Find-Components
                             Write-LogMessage -Type "Info" -MSG "Found PSM installation"
 							$PSMPath = $componentPath.Replace("CAPSM.exe","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $PSMPath -ChildPath "temp\PVConfiguration.xml")
-							$fileVersion = Get-FileVersion "$PSMPath\CAPSM.exe"
+							$fileVersion = [version](Get-FileVersion "$PSMPath\CAPSM.exe")
                             $serviceLogsOldTrace = @(Join-Path -Path $PSMPath -ChildPath "Logs\old\PSMTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $serviceLogsOldConsole = @(Join-Path -Path $PSMPath -ChildPath "Logs\old\PSMConsole.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $ServiceLogsMain = @(Join-Path -Path $PSMPath -ChildPath "Logs\PSMTrace.log")
@@ -821,7 +871,7 @@ Function Find-Components
 							Write-LogMessage -Type "Info" -MSG "Found AIM installation"
 							$AIMPath = $componentPath.Replace("/mode SERVICE","").Replace("AppProvider.exe","").Replace('"',"").Trim()
                             $ConfigPath = (Join-Path -Path $AIMPath -ChildPath "Vault\Vault.ini")
-							$fileVersion = Get-FileVersion "$AIMPath\AppProvider.exe"
+							$fileVersion = [version](Get-FileVersion "$AIMPath\AppProvider.exe")
                             $serviceLogsOldTrace = @(Join-Path -Path $AIMPath -ChildPath "Logs\old\APPTrace.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $serviceLogsOldConsole = @(Join-Path -Path $AIMPath -ChildPath "Logs\old\APPConsole.log.*" | Get-ChildItem -Recurse | Select-Object -Last 10)
                             $ServiceLogsMain = @(Join-Path -Path $AIMPath -ChildPath "Logs\APPTrace.log")
@@ -987,7 +1037,7 @@ Function Set-PVWAURL{
     # Set the PVWA URLS
     $URL_PVWA = "https://"+([System.Uri]$PVWAurl).Host
     $URL_PVWAPasswordVault = $URL_PVWA+"/passwordVault"
-    $script:URL_PVWAAPI = $URL_PVWAPasswordVault+"/api"
+    $global:URL_PVWAAPI = $URL_PVWAPasswordVault+"/api"
     $URL_PVWAAuthentication = $URL_PVWAAPI+"/auth"
     $script:URL_PVWALogon = $URL_PVWAAuthentication+"/$AuthType/Logon"
     $script:URL_PVWALogoff = $URL_PVWAAuthentication+"/Logoff"
@@ -1116,16 +1166,16 @@ Function Invoke-Logon{
     # Get Credentials to Login
     # ------------------------
     $caption = "Enter Credentials"
-    $msg = "Enter your Privilege Cloud Admin Account"; 
-    $global:creds = $Host.UI.PromptForCredential($caption,$msg,"","")
+    $msg = "Enter your Privilege Cloud Admin Account";
+    if(-not($Credentials)){
+        [PSCredential]$script:Credentials = $Host.UI.PromptForCredential($caption,$msg,"","")
+    }
     try{
         # Login to PVWA
-        $script:pvwaLogonHeader = Get-LogonHeader -Credentials $creds
+        $global:pvwaLogonHeader = Get-LogonHeader -Credentials $Credentials
     } catch {
         Throw $(New-Object System.Exception ("Error logging on to PVWA",$_.Exception))
     }
-    # Clear Stored Credentials
-    #$creds = $null
 }
 
 Function Invoke-Logoff{
@@ -1529,6 +1579,154 @@ Function Find-UserInSystemLogs
     
     return $retUser
 }
+
+Function Format-URL($sText) {
+	if ($sText.Trim() -ne "") {
+		return [System.Web.HttpUtility]::UrlEncode($sText.Trim())
+	}
+	else {
+		return ""
+	}
+}
+
+Function New-SearchCriteria {
+	param ([string]$sURL, [string]$sSearch, [string]$sSortParam, [string]$sSafeName, [int]$iLimitPage, [int]$iOffsetPage = 0)
+	[string]$retURL = $sURL
+	$retURL += "?"
+	
+	if (![string]::IsNullOrEmpty($sSearch)) {
+		$retURL += "search=$(Format-URL $sSearch)&"
+	}
+	if (![string]::IsNullOrEmpty($sSafeName)) {
+		$retURL += "filter=safename eq $(Format-URL $sSafeName)&"
+	}
+	if (![string]::IsNullOrEmpty($sSortParam)) {
+		$retURL += "sort=$(Format-URL $sSortParam)&"
+	}
+	if ($iLimitPage -gt 0) {
+		$retURL += "limit=$iLimitPage&"
+	}
+		
+	if ($retURL[-1] -eq '&') {
+		$retURL = $retURL.substring(0, $retURL.length - 1) 
+ }
+	return $retURL
+}
+
+Function Get-Account{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$AccountName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$URLAPI,
+
+        [Parameter(Mandatory=$true)]
+        $logonheader,
+
+        [Parameter(Mandatory=$true)]
+        [string]$SafeName,
+
+        [Parameter(Mandatory=$true)]
+        [int]$limitPage
+    )
+
+    $limitPage = 0
+    $URL_Accounts = $URLAPI + "/Accounts"
+    
+    $AccountsURLWithFilters = ""
+    $AccountsURLWithFilters = $(New-SearchCriteria -sURL $URL_Accounts -sSearch $AccountName -sSafeName $SafeName -iLimitPage $limitPage)    
+
+    Try
+    {
+        #Write-LogMessage -Type Info -Msg "Calling: $($AccountsURLWithFilters)"
+        Write-LogMessage -type Info -MSG "Looking for account $AccountName in vault under safe: '$SafeName'"
+        $GetAccountsResponse = Invoke-RestMethod -Method Get -Uri $AccountsURLWithFilters -Headers $logonheader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR
+        return $GetAccountsResponse
+    }
+    Catch
+    {
+        Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri) $pvwaERR)"
+    }
+}
+
+
+Function Get-AccountPassword{
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$AccountID,
+
+        [Parameter(Mandatory=$true)]
+        [string]$URLAPI,
+
+        [Parameter(Mandatory=$true)]
+        $logonheader
+    )
+
+    $URL_Accounts = $URLAPI + "/Accounts"
+    $URL_AccountPW = "$URL_Accounts/$AccountID/Password/Retrieve"
+
+    Try
+    {
+        #Write-LogMessage -Type Info -Msg "Calling: $($URL_AccountPW)"
+        Write-LogMessage -type Info -MSG "Retrieving account password"
+        $GetAccountPassword = Invoke-RestMethod -Method POST -Uri $URL_AccountPW -Headers $logonheader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR
+        return $GetAccountPassword
+    }
+    Catch{
+        Write-LogMessage -Type Error -Msg "Error: $(Collect-ExceptionMessage $_.exception.message $($_.ErrorDetails.Message) $($_.exception.status) $($_.exception.Response.ResponseUri.AbsoluteUri) $pvwaERR)"
+    }
+}
+
+function Reset-LocalUserPassword {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.PSCredential]$Credential
+    )
+
+    # Check for admin rights
+    if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+        Write-LogMessage -type Error -MSG "This script requires administrative privileges. Please run PowerShell as an administrator."
+        pause
+        exit
+    }
+
+    try {
+        $Username = $Credential.UserName
+        # Check if the user exists
+        $userExists = Get-LocalUser | Where-Object { $_.Name -eq $Username }
+        if (-not $userExists) {
+            Write-LogMessage -type Error -MSG "User '$Username' does not exist."
+            return
+        }
+
+        $securePassword = $Credential.Password
+        Set-LocalUser -Name $Username -Password $securePassword
+        Write-LogMessage -type Success -MSG "Password for user '$Username' has been reset successfully."
+    }
+    catch {
+        Write-LogMessage -type Error -MSG "Failed to reset password for user '$Username'. Error: $_"
+    }
+}
+
+function Test-Credential {
+	param(
+		[parameter(Mandatory=$true,ValueFromPipeline=$true)]
+		[System.Management.Automation.PSCredential]$credential,
+		[parameter()][validateset('Domain','Machine')]
+		[string]$context = 'Domain'
+	)
+	begin {
+		Add-Type -AssemblyName System.DirectoryServices.AccountManagement
+		$DS = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::$context) 
+	}
+	process {
+		$DS.ValidateCredentials($credential.GetNetworkCredential().UserName, $credential.GetNetworkCredential().password)
+	}
+}
 #endregion
 
 #region Functions
@@ -1575,6 +1773,7 @@ Function Invoke-GenerateCredFile
         } Else {
             $appType = $ComponentID
             If($ComponentID -eq "PSM") { $appType = "PSMApp" }
+            If ($ComponentID -eq "AIM") { $appType = "AIMProvider" }
             & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType $appType
         }
     } catch {
@@ -1644,19 +1843,22 @@ Function Invoke-ResetCredFile
             # Reset User pw in the vault and activate it
             Get-UserAndResetPassword -ComponentUser $ComponentUser -UserType $Component.UserType -NewPassword $generatedPassword
             #extract CPM component name to script score so we can use it for apikey reset.
-            if($typeChosen = "CPM"){
-            $global:apiKeyUsername = $ComponentUser
-            $global:apiKeyPath = $Component.Path
+            if($typeChosen.UserType -eq "CPM"){
+                $global:apiKeyUsername = $ComponentUser
+                $global:apiKeyPath = $Component.Path
             }
         }
         # For cases where there is more than one service to start
         Foreach($svc in $Component.ServiceName)
         {
-            Start-CYBRService -ServiceName $svc
+            if (-not($svc -eq "CyberArk Central Policy Manager Scanner")){
+                Start-CYBRService -ServiceName $svc
+            }
         }
+        
         Get-SystemHealth -componentUserDetails $(Get-CredFileUser -File $Component.ComponentUser[0]) -ComponentID $Component.Name
         Test-SystemLogs -ComponentID $Component.Name -LogPath $Component.serviceLogs[0] | Out-Null
-        Invoke-Logoff
+        #Invoke-Logoff
     } catch {
         Throw $(New-Object System.Exception ("Error in the flow of Resetting component $($Component.Name) credentials file.",$_.Exception))
     }
@@ -1722,7 +1924,7 @@ Write-LogMessage -type Info -MSG "Testing if SendWait function will work..."
 $dummyString = "Test"
 $teststring = $null
 $specialchars = '!@#$%^&*()'',./\`~[]":?<>+|'.ToCharArray()
-[string]$simplePw = ($creds.GetNetworkCredential().password)
+[string]$simplePw = ($Credentials.GetNetworkCredential().password)
 
 #Escape curly brackets from SendWait command
 if($simplePw -match "{"){$simplePw = $simplePw.Replace("{","_LEFT_")}
@@ -1765,7 +1967,6 @@ if(gc $ApiLogs | Select-String "ERROR"){
 Write-LogMessage -type Warning -MSG "Couldn't reset API key, check for errors in logfile: $ApiLogs"
 }
 
-$creds = $null
 $simplePw = $null
 }
 
@@ -1829,22 +2030,74 @@ try{
             Write-Host "Exiting..." -ForegroundColor Gray
             break
         }
-        Else
+                Else
         {
             $answer = [int]$answer #if answer is not a letter (Q) convert to int so we can use the below command
             $typeChosen = $detectedComponents[$answer-1]
             Invoke-ResetCredFile -Component $typeChosen
-            if($typeChosen.Name -eq "CPM"){
-               $decisionAPIKey = Get-Choice -Title "Would you like to also reset CPM Scanner APIKey?" -Options "Yes (Recommended)", "No" -DefaultChoice 1
-               if($decisionAPIKey -eq "No")
-               {
-                     Write-LogMessage -Type info -MSG "Selected not to run CPM Scanner APIKey reset."
-               }
-               Else{
-                    Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $creds.UserName
-                   }
+            switch ($typeChosen.Name)
+            {
+                "CPM"
+                {
+                    $PluginManagerUser = "PluginManagerUser"
+                    Write-LogMessage -type Info -MSG "Syncing $PluginManagerUser"
+                    if ($typeChosen.Version -ge [version]"13.1")
+                    {
+                        # Sync PluginManagerUser
+                        # Get account details
+                        $GetAccountResponse = Get-Account -AccountName "$PluginManagerUser" -URLAPI $URL_PVWAAPI -logonheader $pvwaLogonHeader -SafeName "$($apiKeyUsername)_Accounts" -limitPage 0
+                        if($GetAccountResponse)
+                        {
+                            # Get account password using acc details
+                            $GetAccPassword = Get-AccountPassword -AccountID $($GetAccountResponse.value.id) -URLAPI $URL_PVWAAPI -logonheader $pvwaLogonHeader
+                            # If we get pw, perform an action to verify the windows user pw is correct
+                            if($GetAccPassword){
+                                # Check password is in sync by running generic powershell command
+                                $success = $false
+                                $securePassword = ConvertTo-SecureString $GetAccPassword -AsPlainText -Force
+                                $LocalUserCreds = New-Object System.Management.Automation.PSCredential ($PluginManagerUser, $securePassword)
+                                Write-LogMessage -type Info -MSG "Running test command using password from the vault with windows user '$PluginManagerUser'"
+                                # Run generic command in AD
+                                $validationResult = Test-Credential -credential $LocalUserCreds -context 'Machine'
+                                if ($validationResult){
+                                    Write-LogMessage -type Success -MSG "Account: $PluginManagerUser is synced!"
+                                }Else{                                
+                                    Write-LogMessage -type Warning -MSG "Account: $PluginManagerUser is out of sync!"
+                                    $SyncAccountDecission = Get-Choice -Title "Would you like the script to attempt to sync the accounts?" -Options "Yes (Recommended)", "No" -DefaultChoice 1
+                                    if ($SyncAccountDecission -eq "No") {
+                                        Write-LogMessage -Type info -MSG "Selected not to sync user $PluginManagerUser ."
+                                    }Else{
+                                        # Sync local user with password from vault
+                                        Reset-LocalUserPassword -Credential $LocalUserCreds
+                                    }
+                                }
+                            }
+                            Else
+                            {
+                                Write-LogMessage -type Error -MSG "Was unable to retrieve account password: '$($PluginManagerUser)' You will have to do this manually."
+                            }
+                        }
+                        Else
+                        {
+                            Write-LogMessage -type Error -MSG "Was unable to retrieve account: '$($PluginManagerUser)' You will have to do this manually."
+                        }
+                    }Else{
+                        Write-LogMessage -type Warning -MSG "Old CPM version detected, can't perform $PluginManagerUser Sync action, do it manually by contacting CyberArk Support if the user is out of sync."
+                    }
+                        # Reset APIKey
+                        $decisionAPIKey = Get-Choice -Title "Would you like to also reset CPM Scanner APIKey?" -Options "Yes (Recommended)", "No" -DefaultChoice 1
+                        if ($decisionAPIKey -eq "No") {
+                            Write-LogMessage -Type info -MSG "Selected not to run CPM Scanner APIKey reset."
+                            # Scanner service
+                            Start-CYBRService -ServiceName $typeChosen.ServiceName[1]
+                        } else {
+                            Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $Credentials.UserName
+                            # Scanner service
+                            Start-CYBRService -ServiceName $typeChosen.ServiceName[1]
+                            $Credentials = $null
+                        }
+                }     
             }
-            #Maybe in the future add AIM Here (ComponentID=AIM)
         }
     }
     else {
@@ -1853,15 +2106,20 @@ try{
 } catch {
     Write-LogMessage -type Error -Msg "There was an error running the script. Error $(Join-ExceptionMessage $_.Exception)"
 }
+Finally{
+    Invoke-Logoff
+    $Credentials = $null
+}
 # Script ended
 Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
 ###########
+
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCB8DZ+mCDzWBiQS
-# UI4xyqrynhjvp1F0jrB7mid7+Oz0faCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDlEk6aMV5Spb7A
+# CWqzWwADSBB0z5wYlGrXHns2ixCuWKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -1996,22 +2254,22 @@ return
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEILQosIcZpap6T2JjXtrfheXZrwCiQ/EHSAuG+RAjtASKMA0GCSqGSIb3
-# DQEBAQUABIICAFmJgUBdqNPjOR8yVNN/GYZtZla9kcohSGdJe7FFPq2AFv/rbZuV
-# pUFGXgOC/beusMqgXKJikIldA/Bff5kFqFlolnFiP8iEdFYVdIJonp8woqzPI0sC
-# T6zFTOzhE/FPoN9PqeYXzBEa95rdHuHWVxBGThz5a+ve/S0JeUFF+1vlewW50dCX
-# t9JiLUyYRCaFuKxVl3k7cbpFHWEZ3ksMmvOTcFbFshB03/UyqbLy9RmcB/ofW26E
-# 8lpS3JAvO7dnaJB0Y6baQXAHDx3V+L5SS8t+NIBuG3jTDqStOo/0cCS6fJRW9cON
-# yK68WkQCwnNbUSupGhd/MfQ2bSnZQbddh28x9k2EEcGmW2bJSTD7MgVHUn08dI18
-# q8ljP+XSPN/oAK8oJfn+cUOEUAh3pZUB/gm01dyKKQvMyYpy+XISUHVv8+mseNOu
-# 8D6sHIqwZ+EBfRThk+sY+eSd69YUODLpooyvlNjybEz0UktvnJzu2qLA1MdBJqpz
-# //0RcGqfMBj18mvItLXw2S+OXKFh2KgCH6srDhpdhMUv4pgkG6Aa3w7Jc1blp/Z5
-# ONUnCpa58It7f6juYTuQDpsgdw0UZBGN2qnZj0HMNaSWq4+W84TTGcL9nMn/f577
-# 38slVA0imgBj9V5Zhd0+Ix6qhSDZHvMAUu+ZMDFvOoxt3jqQfbE87BFvoYIOLDCC
+# AQkEMSIEIPQYOxLF3XpmgWCU5EqEf+PgIL7/vmwRofOQKmwJvEOJMA0GCSqGSIb3
+# DQEBAQUABIICAAHR2YwKz9Jm9onFdXIoOvZ2mPrB9WjVOO2aQg5XTWHzSxCjxB9e
+# 87MLDn380kcjfcsAdPuWBfio4+e5Sv7Rm/q4R/W2uq5nJehkynwzDbpmq8b1jwVy
+# fTNIxIDcC8eXCPx1Scn/XMQ6sOd5hxUH7taEdvJdCBkbY0cLwPkDpMATYCsUJO50
+# ZtRTJbV4ihMUeCQJHzvm8m1Ppcpzf3cYDbmlittCqxpggWf4XQoLUfYew2ZTFiim
+# d6p4xucR88aLRqKKFrEvf0709EkUV614sNgiTkJTVa2SyZMjjbtvsSx9+/bUM/si
+# 0+H7kkBnVZmMHnkk/oazXDjcOGOgD+A8JM5MalzCNBEoFw1eT/vQ2Cf/NOKjXV5E
+# wQIfsJ7p/mwloCdF5nWxGgCa/dor+ldHCtxPxO1/zJxHR9dbTY376fk8AlTF0Sv0
+# Us/6FDQFIWPd/itNjc3Qt34sUxSy7UJFHg7+JiFxGTQPpcf8mB+/4xeCx6ySDLVi
+# eb0U6OfbJlb/YTd0YUb3Ub/IP/cR4So2r/mS3FkiBpMAlFjfxTIEhsA903vmZKLc
+# h6fDQfFOwWBBBIlCJIeXPHVdq8xKKivy/NSSYlAVUPSB0hdfnFantrPWsygqJFSF
+# HS2P0C8H7hxTgYZ1Sj/jqv53k3Zqox43qBK3l5wyh47DKSYw5Wq89m2poYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFE32NUGcTEslUE1nM4Gj4iaogjMVAhUAteJogjGD
-# ruQPWMH4iNWy04ahzeQYDzIwMjMwODE2MDk1NDM2WjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFDdRHQhWUoVzjnNaeY+rO0ouD9FgAhUAmFGzWZrm
+# mqsGkjjDP7Yvubu9ETYYDzIwMjQwMjIzMTMxNjI4WjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -2075,13 +2333,13 @@ return
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjMwODE2MDk1NDM2WjAvBgkqhkiG9w0BCQQxIgQg
-# Dn1eYREAX3OlfFroagv4eSq9L50UsojBvhebmYHF72wwNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjIzMTMxNjI4WjAvBgkqhkiG9w0BCQQxIgQg
+# 53carPnM8zTgyJLvBKaafBdVljEw1H+yDP0C4XNa6/owNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAHZMGX03xeq1JXn6aTN5zCxXlHpJWGvCg6nwRJlvhvXBp0w7Oq0m
-# xVMrAocsJgti+he8PEJ+izLDRJ6K77B/i5wPkdisNzlCTCNjWtNbaOgq1Copwcw3
-# 1HFdatwkKD6/3PT1nPb6W/HLHk/MuiH7GLDEpVooSt1kXNEw1tvwTTWncPJC7DZ4
-# QbOUz4u/zzGBTAysWjFpVfff0McpchP0kVRm9uJqfY/Xr5iVd5iRec1QKpLBisda
-# FTH3Th+9vvrJcAbpTrYAzvGoEe98cWhM43RR1VlmFcjcwY/iL52HpbrFtV7YSIBk
-# 03yGAv6gfhPSFnTnwwUEaBm3Ndt0bqjgsCY=
+# hvcNAQEBBIIBAC0doVmkhNNUzLSM0/pqksMZyOgPvlZAW3v3pcGq6/EXa/k62P5s
+# sUQALnlo5Dfl+Kt68vy67wjM0YNfp4bPNYB0E6Kd6nHywOJ1Liy4UmZJm1Z7UwU9
+# tQA0hDGMjZ/NLMua44Fh12kqWmNvuHHU9fwFzgMyhyNXxP4wtHCbgorU4rXod5u0
+# VhIbaoH41FPNfoKgL3yZyppy3qaH+P5MN6yCHygqxomKd6tpvC3UBtB95zAxHNwF
+# X0T+f9DmIwgn9RzBmdHya5b23PBjvi2sotg3OwesaFeuUF1twmiyHYt9k9jGwHXA
+# z425kALYk2JVc+c3BRDJblYsEEqBSmNHEW4=
 # SIG # End signature block
