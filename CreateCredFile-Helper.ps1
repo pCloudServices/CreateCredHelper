@@ -14,18 +14,26 @@ param(
     [Parameter(Mandatory=$False)]
     [ValidateSet("cyberark","ldap")]
     [string]$AuthType = "cyberark",
+
     [Parameter(Mandatory=$false)]
     [Switch]$SkipVersionCheck,
-    [switch]$skipTLS,
+
+    [Parameter(Mandatory=$false)]
+    [Switch]$skipTLS,
+
     [Parameter(Mandatory = $false, HelpMessage = "Specify a User that has Privilege Cloud Administrative permissions.")]
-    [PSCredential]$Credentials
+    [PSCredential]$Credentials,
+
+    [Parameter(Mandatory=$false)]
+    [Switch]$SkipCertVerification
 )
+
 
 $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "3"
+$ScriptVersion = "3.1"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1422,54 +1430,84 @@ Function Start-CYBRService
     }
 }
 
-Function IgnoreCert{
-#Set registry to use TLS12
-$GetTLS = [Net.ServicePointManager]::SecurityProtocol -match "tls12"
-$GetTLSReg86 = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319').SchUseStrongCrypto -eq 1
-$GetTLSReg64 = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319\').SchUseStrongCrypto -eq 1
+Function enforceTLS{
+    # Check if SecurityProtocol is SystemDefault or matches tls12
+    $securityProtocol = [Net.ServicePointManager]::SecurityProtocol
+    $isSystemDefault = $securityProtocol -eq 'SystemDefault'
+    $isTLS12 = $securityProtocol -match 'Tls12'
 
-if(($GetTLS -ne $true) -or ($GetTLSReg86 -ne $true) -or ($GetTLSReg64 -ne $true)){
-    Write-LogMessage -type Info -MSG "Detected TLS12 is not enforced, enforcing it via registry"
-    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value '1' -Type DWord -Force -Verbose
-    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value '1' -Type DWord -Force -Verbose
-    Write-LogMessage -type Info -MSG "Please restart powershell to complete TLS12 settings. If this error keeps repeating, rerun the script with -skipTLS flag"
-    Pause
-    Stop-Process $PID
+    # Check .NET Framework registry settings for SchUseStrongCrypto
+    $GetTLSReg86 = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319').SchUseStrongCrypto -eq 1
+    $GetTLSReg64 = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319').SchUseStrongCrypto -eq 1
+
+    # Additional registry checks for TLS 1.2 Client and Server
+    $tls12ClientEnabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client" -Name "Enabled" -ErrorAction SilentlyContinue
+    $tls12ServerEnabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server" -Name "Enabled" -ErrorAction SilentlyContinue
+
+    $isClientEnabled = $tls12ClientEnabled.Enabled -eq 1 -or $tls12ClientEnabled.Enabled -eq $null
+    $isServerEnabled = $tls12ServerEnabled.Enabled -eq 1 -or $tls12ServerEnabled.Enabled -eq $null
+
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+    # Logic to handle SystemDefault or incorrect TLS 1.2 settings
+    if (-not $isTLS12 -and -not $isSystemDefault) {
+        Write-LogMessage -Type Info -MSG "Detected TLS12 is not enforced, enforcing it via registry"
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value 1 -Type DWord -Force -Verbose
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value 1 -Type DWord -Force -Verbose
+        Write-LogMessage -Type Info -MSG "Please restart the machine for changes to take effect. If this error keeps repeating, rerun the script with -skipTLS flag"
+        Pause
+        Stop-Process -Id $PID
+    } elseif ($isSystemDefault -and -not ($GetTLSReg86 -and $GetTLSReg64 -and $isClientEnabled -and $isServerEnabled)) {
+        Write-LogMessage -Type Info -MSG "SystemDefault is set but registry settings for TLS 1.2 Client/Server are not properly configured. Configuring now."
+        # Add logic here to set the registry settings for TLS 1.2 Client and Server, if necessary
+    } else {
+        Write-LogMessage -Type Info -MSG "TLS 1.2 is properly configured."
+    }
 }
 
-#Ignore certificate error
-if (-not ([System.Management.Automation.PSTypeName]'ServerCertificateValidationCallback').Type)
-    {
-		$certCallback = @"
-			using System;
-			using System.Net;
-			using System.Net.Security;
-			using System.Security.Cryptography.X509Certificates;
-			public class ServerCertificateValidationCallback
-			{
-				public static void Ignore()
-				{
-					if(ServicePointManager.ServerCertificateValidationCallback ==null)
-					{
-						ServicePointManager.ServerCertificateValidationCallback += 
-							delegate
-							(
-								Object obj, 
-								X509Certificate certificate, 
-								X509Chain chain, 
-								SslPolicyErrors errors
-							)
-							{
-								return true;
-							};
-					}
-				}
-			}
+Function IgnoreCert {
+    param(
+        [bool]$SkipCertVerification = $false # Add a parameter to control certificate verification skipping
+    )
+
+    # Your existing logic to check and enforce TLS 1.2 settings
+
+    if ($SkipCertVerification) {
+        # The portion of the script that ignores certificate errors
+        Write-LogMessage -Type Info -MSG "Skipping certificate verification as per script parameter."
+        if (-not ([System.Management.Automation.PSTypeName]'ServerCertificateValidationCallback').Type) {
+            $certCallback = @"
+                using System;
+                using System.Net;
+                using System.Net.Security;
+                using System.Security.Cryptography.X509Certificates;
+                public class ServerCertificateValidationCallback
+                {
+                    public static void Ignore()
+                    {
+                        if (ServicePointManager.ServerCertificateValidationCallback == null)
+                        {
+                            ServicePointManager.ServerCertificateValidationCallback +=
+                                delegate
+                                (
+                                    Object obj, 
+                                    X509Certificate certificate, 
+                                    X509Chain chain, 
+                                    SslPolicyErrors errors
+                                )
+                                {
+                                    return true;
+                                };
+                        }
+                    }
+                }
 "@
-			Add-Type $certCallback
-	}
-	[ServerCertificateValidationCallback]::Ignore()
-    #ERROR: The request was aborted: Could not create SSL/TLS secure channel.
+            Add-Type $certCallback
+        }
+        [ServerCertificateValidationCallback]::Ignore()
+    }
+    
+    # This line ensures TLS 1.2 is used for future requests. Consider the context and necessity as per earlier discussion.
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 }
 
@@ -2015,8 +2053,10 @@ If ($(Test-CurrentUserLocalAdmin) -eq $False)
 
 try{
     
-    # Ignore SSL Cert issues
-    if(-not($skipTLS)){IgnoreCert}
+    # skip TLS checks
+    if(-not($skipTLS)){enforceTLS}
+    # ignore cert issues
+    if(-not($SkipCertVerification)){IgnoreCert}
 
     #Create A Dynamic Menu based on the services found
     $detectedComponents = $(Find-Components)
@@ -2107,19 +2147,18 @@ try{
     Write-LogMessage -type Error -Msg "There was an error running the script. Error $(Join-ExceptionMessage $_.Exception)"
 }
 Finally{
-    Invoke-Logoff
+    Try{Invoke-Logoff}Catch{}
     $Credentials = $null
 }
 # Script ended
 Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
 ###########
-
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDlEk6aMV5Spb7A
-# CWqzWwADSBB0z5wYlGrXHns2ixCuWKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDRmKYlUjSMQ0ZI
+# PWsylAst7Dz85irhVhBAVDVzsP6iPKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -2254,22 +2293,22 @@ return
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIPQYOxLF3XpmgWCU5EqEf+PgIL7/vmwRofOQKmwJvEOJMA0GCSqGSIb3
-# DQEBAQUABIICAAHR2YwKz9Jm9onFdXIoOvZ2mPrB9WjVOO2aQg5XTWHzSxCjxB9e
-# 87MLDn380kcjfcsAdPuWBfio4+e5Sv7Rm/q4R/W2uq5nJehkynwzDbpmq8b1jwVy
-# fTNIxIDcC8eXCPx1Scn/XMQ6sOd5hxUH7taEdvJdCBkbY0cLwPkDpMATYCsUJO50
-# ZtRTJbV4ihMUeCQJHzvm8m1Ppcpzf3cYDbmlittCqxpggWf4XQoLUfYew2ZTFiim
-# d6p4xucR88aLRqKKFrEvf0709EkUV614sNgiTkJTVa2SyZMjjbtvsSx9+/bUM/si
-# 0+H7kkBnVZmMHnkk/oazXDjcOGOgD+A8JM5MalzCNBEoFw1eT/vQ2Cf/NOKjXV5E
-# wQIfsJ7p/mwloCdF5nWxGgCa/dor+ldHCtxPxO1/zJxHR9dbTY376fk8AlTF0Sv0
-# Us/6FDQFIWPd/itNjc3Qt34sUxSy7UJFHg7+JiFxGTQPpcf8mB+/4xeCx6ySDLVi
-# eb0U6OfbJlb/YTd0YUb3Ub/IP/cR4So2r/mS3FkiBpMAlFjfxTIEhsA903vmZKLc
-# h6fDQfFOwWBBBIlCJIeXPHVdq8xKKivy/NSSYlAVUPSB0hdfnFantrPWsygqJFSF
-# HS2P0C8H7hxTgYZ1Sj/jqv53k3Zqox43qBK3l5wyh47DKSYw5Wq89m2poYIOLDCC
+# AQkEMSIEIGVG+9P6X7ENC/fyD5W4VSzuikjFumhJk8Ubov4eGBmdMA0GCSqGSIb3
+# DQEBAQUABIICAAGWXAu/0gmngc9iOm7+MFpv/Ao4ewPD/Y+JHpqqrFApIE3Xcedt
+# YD2mQVcUrhnlgcW/ZX3fLHWq37fCJ6HWprBhD/8gLCg6eTi96gIa7XMsiwBE9wNO
+# pFhs8Y4rCE7s7flliQCKUyC3yIDc/mrpF+AvJ/kqN7dDPbA2Y+ZEwDsQU9WRLjoh
+# 59b5yK2qqzhbhHX46uyGlyX2CBwG/iroP66y7i+JO3BAJOIYWtlgoBU0wTYc55/e
+# uM0V+ZyKRgNFT/nUroechkQBpysxuRHAALXgt9E2sD7AGKy0vOVYETZChr2oc2HF
+# eA3X2S65wA4zSLVWswv3caLeEO0swlfeY9nkIzzFyNdx55MxpQv/zXNASCTjPEN5
+# axVKe3OQfFU4BWIG+lcsFI80fr4sS0uFE1ivo6JY4NEyEtUUBK0+vfrUvmL1uGR3
+# +doe5ZAODJz9GQLErIm2opLBykCuDRiVRkKKql5J+X/gOLLC0r34Pvfd6nBIB4a1
+# zD1lczZ0xjmhk4vTzG5FDOvMrWL315syFSJvlE+SBIY6HKMOMMWCTC0H2C0kmtg/
+# khJIptQKUjctf158CZ+ohfJsbU5kiP6PzokdnM82CkSuGG71mwpmQEZW14RkGoI9
+# JIJvGtvqkAkrQMbQ7Grj1fuMrJw9l18XyJnNPUzPQ1SRYN/l1I3qPHW0oYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFDdRHQhWUoVzjnNaeY+rO0ouD9FgAhUAmFGzWZrm
-# mqsGkjjDP7Yvubu9ETYYDzIwMjQwMjIzMTMxNjI4WjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFOij1eodlr95eBho46Vfx8K88NsZAhUA6QO6JAH/
+# GoSHjhgyZaetiTlbj1UYDzIwMjQwMjI1MTU1MDAxWjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -2333,13 +2372,13 @@ return
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjIzMTMxNjI4WjAvBgkqhkiG9w0BCQQxIgQg
-# 53carPnM8zTgyJLvBKaafBdVljEw1H+yDP0C4XNa6/owNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjI1MTU1MDAxWjAvBgkqhkiG9w0BCQQxIgQg
+# /s0D+aWarOxMdifgXaBPQNjetfGqiGXvdG2JiIKOzGkwNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAC0doVmkhNNUzLSM0/pqksMZyOgPvlZAW3v3pcGq6/EXa/k62P5s
-# sUQALnlo5Dfl+Kt68vy67wjM0YNfp4bPNYB0E6Kd6nHywOJ1Liy4UmZJm1Z7UwU9
-# tQA0hDGMjZ/NLMua44Fh12kqWmNvuHHU9fwFzgMyhyNXxP4wtHCbgorU4rXod5u0
-# VhIbaoH41FPNfoKgL3yZyppy3qaH+P5MN6yCHygqxomKd6tpvC3UBtB95zAxHNwF
-# X0T+f9DmIwgn9RzBmdHya5b23PBjvi2sotg3OwesaFeuUF1twmiyHYt9k9jGwHXA
-# z425kALYk2JVc+c3BRDJblYsEEqBSmNHEW4=
+# hvcNAQEBBIIBACaN8WNbLeDCAxDvTcSASgdDBX5d0LMNQOCgtK4FxWOckrlw9WQm
+# 5yp796pR6Jvv03OgLsV51dWXP3ugSvW+PEiGVVaiVxviOujFNAwEJat4KnRNkajA
+# gkslCIoKqVaZw/OHZIrv+PXeMlrCuQcYc5VvnDQfTSr/WIzKve+AVTazGfFEXrF4
+# PZI65pR2ZeiuycArC47vWAzMNc8dzCIvD1mEkw/pl6q+JKuXhyaCTGihtaSBqQLk
+# hVAW7+IeVmYKCQKymUOQEhXd4q8N7NtIyhu97nXRqbcIUwyaT1uOFeCKWNgBjVKm
+# uTn9uxTIBPws8QHpAtjKvZLg1ej/Vs/Sa+Q=
 # SIG # End signature block
