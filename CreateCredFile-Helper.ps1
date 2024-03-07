@@ -33,7 +33,7 @@ $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "3.1"
+$ScriptVersion = "3.2"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1709,8 +1709,10 @@ Function Get-AccountPassword{
     Try
     {
         #Write-LogMessage -Type Info -Msg "Calling: $($URL_AccountPW)"
+
+        $bodyReason = @{ reason = "User ran pcloudtools API script" } | ConvertTo-Json
         Write-LogMessage -type Info -MSG "Retrieving account password"
-        $GetAccountPassword = Invoke-RestMethod -Method POST -Uri $URL_AccountPW -Headers $logonheader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR
+        $GetAccountPassword = Invoke-RestMethod -Method POST -Uri $URL_AccountPW -Headers $logonheader -ContentType "application/json" -TimeoutSec 2700 -ErrorVariable pvwaERR -Body $bodyReason
         return $GetAccountPassword
     }
     Catch{
@@ -1938,6 +1940,192 @@ Function Get-UserAndResetPassword{
     }
 }
 
+# @FUNCTION@ ======================================================================================================================
+# Name...........: Add-CALocalUser
+# Description....: Creates a new local user using the username, password and description submitted 
+# Parameters.....: $userName - The username of user to create
+#                  $userPassword - The user password
+#                  $userDescription - The user description of user to create
+# Return Values..: $true or $false
+# =================================================================================================================================
+function Add-CALocalUser{
+	[CmdletBinding()] 
+   param(
+   [parameter(Mandatory=$true)]
+   [ValidateNotNullOrEmpty()]$userName,
+   [parameter(Mandatory=$true)]
+   [ValidateNotNullOrEmpty()][System.Security.SecureString]$userPassword,
+   [parameter(Mandatory=$true)]
+   [ValidateNotNullOrEmpty()]$userDescription
+   )
+     	Process {
+		Try{
+            $result = $false
+			   Write-LogMessage -Type Info -MSG "Attempting to create new local user $userName"
+
+            $localComputer = [ADSI]"WinNT://$env:COMPUTERNAME"
+            $existingUser = $localComputer.Children | where {$_.SchemaClassName -eq 'user' -and $_.Name -eq $userName }
+
+            if ($existingUser -eq $null) {
+      
+				$user = $localComputer.Create("User", $userName)
+				
+				$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($userPassword)
+	            $user.SetPassword([System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR))
+	            $user.SetInfo()
+				[System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+	       
+	            $user.Put("Description", $userDescription)
+	            $user.SetInfo()
+               Write-LogMessage -Type Info -MSG "The local user $userName has been successfully created"
+            }
+            else {
+                Write-LogMessage -Type Info -MSG "Local user $userName is already exists."
+            }
+
+		}Catch{
+            Write-LogMessage -Type "Error" -Msg "Error: $(Join-ExceptionMessage $_.Exception)"
+		}
+	}
+	End{
+   }
+}
+
+# @FUNCTION@ ======================================================================================================================
+# Name...........: New-CANewAccessControlObject
+# Description....: Get the relevant access control object for this path.
+# Parameters.....: $path - The location path we want to set permissions.
+#				   $identity - The identity we want to set the relevant permissions.
+#				   $rights - The rights we want to set to the identity on this path.
+#							 Please Notice this needs to be string indicate enum name from System.Security.AccessControl.RegistryRights or System.Security.AccessControl.FileSystemRights enums.
+# Return Values..: $NUll is couldn't create object, otherwise it return the relevant object.
+# =================================================================================================================================
+function New-CANewAccessControlObject{
+   [CmdletBinding()] 
+   param(
+   [parameter(Mandatory=$true)]
+   [ValidateNotNullOrEmpty()]$path,
+   [parameter(Mandatory=$true)]
+   [ValidateNotNullOrEmpty()]$identity,
+   [ValidateNotNullOrEmpty()]$rights
+   )
+	Process {
+		$returnVal = $NULL
+		try {
+			$item = Get-Item -Path $path
+			
+			If ($item -is [System.IO.DirectoryInfo]) {
+				$returnVal = New-Object System.Security.AccessControl.FileSystemAccessRule ($identity,$rights,"ContainerInherit,ObjectInherit","None","Allow")
+			} ElseIf ($item -is [Microsoft.Win32.RegistryKey]) {
+				$returnVal = New-Object System.Security.AccessControl.RegistryAccessRule ($identity,$rights,"ContainerInherit,ObjectInherit","None","Allow")
+			} ElseIf ($item -is [System.IO.FileInfo]){
+				$returnVal = New-Object System.Security.AccessControl.FileSystemAccessRule ($identity,$rights,"Allow")
+			}
+		} Catch {
+			Write-LogMessage -Type "Error" -Msg "Error: $(Join-ExceptionMessage $_.Exception)"
+		}
+		return $returnVal
+	}
+	End{
+   }
+}
+
+
+function Set-CAPermissions{
+   [CmdletBinding()] 
+   param(
+   [parameter(Mandatory=$true)]
+   [ValidateNotNullOrEmpty()]$path,
+   [parameter(Mandatory=$true)]
+   [ValidateNotNullOrEmpty()]$identity,
+   [parameter(Mandatory=$true)]
+   [ValidateNotNullOrEmpty()]$rights,
+   [ValidateNotNullOrEmpty()]
+   [bool]$removePreviousPermisions = $false
+
+   )
+	Process {
+		$returnVal = $false
+		try {
+			$acl =( Get-Item $path).GetAccessControl('Access')
+			
+			$aclPermision = New-CANewAccessControlObject -path $path -identity $identity -rights $rights
+			$acl.AddAccessRule($aclPermision)
+
+			$acl = Set-Acl -Path $path -AclObject $acl -Passthru
+		} Catch {
+			Write-LogMessage -Type "Error" -Msg "Failed to set new permissions: '$rights' on path: '$path' to user\group: '$identity' Error: $(Join-ExceptionMessage $_.Exception)" 
+		}
+	}
+	End{
+   }
+}
+
+function SetAclPermissions($username, $path, $permissions, $allowOrDeny){
+	
+	$aclFromPath = Get-Acl $path
+	
+	$AccessRule = New-Object System.Security.AccessControl.FileSystemAccessRule($username,$permissions,"ContainerInherit, ObjectInherit","None",$allowOrDeny)
+	 
+	 $aclFromPath.SetAccessRule($AccessRule)
+	 
+	 Set-Acl -Path $path -AclObject $aclFromPath
+}
+
+
+function Add-CAUserRight {
+    param(
+        [parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        $userName,
+
+        [parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        $userRight
+    )
+    Process {
+        try {
+            $ntprincipal = new-object System.Security.Principal.NTAccount "$userName"
+            $userSid = $ntprincipal.Translate([System.Security.Principal.SecurityIdentifier])
+            $userSidstr = $userSid.Value.ToString()
+
+            if ([string]::IsNullOrEmpty($userSidstr)) {
+                Write-LogMessage -Type "Error" -Msg "User $userName not found!"
+            }
+
+            $tempPath = [System.IO.Path]::GetTempPath()
+            $exportPath = Join-Path -Path $tempPath -ChildPath "export.inf"
+            secedit.exe /export /cfg "$exportPath" >$null 2>&1
+
+            $currentRightKeyValue = (Select-String $exportPath -Pattern "$userRight").Line
+            $splitedKeyValue = $currentRightKeyValue.split("=", [System.StringSplitOptions]::RemoveEmptyEntries)
+            $currentSidsValue = $splitedKeyValue[1].Trim()
+
+            if ($currentSidsValue -notlike "*$userSidstr*") {
+                $newSidsValue = if ([string]::IsNullOrEmpty($currentSidsValue)) { "*$userSidstr" } else { "*$userSidstr,$currentSidsValue" }
+
+                $importPath = Join-Path -Path $tempPath -ChildPath "import.inf"
+                $importFileContent = @"
+[Unicode]
+Unicode=yes
+[Version]
+signature="`$CHICAGO`$"
+Revision=1
+[Privilege Rights]
+$userRight = $newSidsValue
+"@
+                Set-Content -Path $importPath -Value $importFileContent -Encoding Unicode -Force
+                secedit.exe /configure /db secedit.sdb /cfg "$importPath" /areas USER_RIGHTS >$null 2>&1
+            }
+
+            Remove-Item -Path $importPath -Force
+            Remove-Item -Path $exportPath -Force
+        } catch {
+            Write-LogMessage -Type "Error" -Msg "Failed to add $userRight user right for user $userName. Error: $_"
+        }
+    }
+}
+
 Function Invoke-ResetAPIKey
 {
     [CmdletBinding()]
@@ -2080,9 +2268,10 @@ try{
                 "CPM"
                 {
                     $PluginManagerUser = "PluginManagerUser"
+                    $cpmPath = $typeChosen.Path
                     Write-LogMessage -type Info -MSG "Syncing $PluginManagerUser"
                     if ($typeChosen.Version -ge [version]"13.1")
-                    {
+                    {   
                         # Sync PluginManagerUser
                         # Get account details
                         $GetAccountResponse = Get-Account -AccountName "$PluginManagerUser" -URLAPI $URL_PVWAAPI -logonheader $pvwaLogonHeader -SafeName "$($apiKeyUsername)_Accounts" -limitPage 0
@@ -2092,9 +2281,39 @@ try{
                             $GetAccPassword = Get-AccountPassword -AccountID $($GetAccountResponse.value.id) -URLAPI $URL_PVWAAPI -logonheader $pvwaLogonHeader
                             # If we get pw, perform an action to verify the windows user pw is correct
                             if($GetAccPassword){
+                                $securePassword = ConvertTo-SecureString $GetAccPassword -AsPlainText -Force
+                                Write-LogMessage -type Info -MSG "Successfully retrieved password, proceeding syncing locally."
+                                # if local user doesn't exist, let's create it so we can reset pw.
+                                if(-not(Get-LocalUser $PluginManagerUser -ErrorAction SilentlyContinue)){
+                                    Write-LogMessage -type Warning -MSG "User '$PluginManagerUser does not exist, let's try to create it."
+                                    
+                                    Add-CALocalUser -userName $PluginManagerUser -userPassword $securePassword -userDescription "CyberArk Plugin Manager User used by CyberArk Password Manager service"
+                                    # Retrieve PasswordManagerUser SID
+                                    $ntprincipal = new-object System.Security.Principal.NTAccount "PasswordManagerUser"
+                                    $userSid = $ntprincipal.Translate([System.Security.Principal.SecurityIdentifier])
+                                    $userSidstr = $userSid.Value.ToString()
+                                    # Retrieve PasswordManagerUser registry path
+                                    [string]$DnsHost = $env:COMPUTERNAME.Trim()
+                                    $userREGPaths = @("registry::HKEY_USERS\$userSidstr\Software","registry::HKEY_USERS\$userSidstr")
+                                    # Grant regsitry permissions
+                                    Write-LogMessage -type Info -MSG "Granting registry permissions."
+                                    foreach ($userREGPath in $userREGPaths){ 
+                                        Set-CAPermissions $userREGPath "$DnsHost\$PluginManagerUser" "FullControl"
+                                    }
+                                    Write-LogMessage -type Info -MSG "Granting folder permissions."
+                                    SetAclPermissions $PluginManagerUser ($env:USERPROFILE + "\..\" + "$PluginManagerUser") "FullControl" "Allow"
+                                    SetAclPermissions $PluginManagerUser ($cpmPath) "ReadAndExecute" "Allow"	 
+                                    SetAclPermissions $PluginManagerUser ($cpmPath + "\" + "Scanner") "ReadAndExecute" "Deny"
+                                    SetAclPermissions $PluginManagerUser ($cpmPath + "\" + "Logs") "Modify" "Allow"
+                                    SetAclPermissions $PluginManagerUser ($cpmPath + "\" + "tmp") "FullControl" "Allow"
+                                    SetAclPermissions $PluginManagerUser ($cpmPath + "\" + "bin") "ReadAndExecute" "Allow"
+                                    Write-LogMessage -type Info -MSG "Adding User to 'Allow log on locally' policy."
+                                    Add-CAUserRight $PluginManagerUser "SeInteractiveLogonRight"
+                                }
+                                
+
                                 # Check password is in sync by running generic powershell command
                                 $success = $false
-                                $securePassword = ConvertTo-SecureString $GetAccPassword -AsPlainText -Force
                                 $LocalUserCreds = New-Object System.Management.Automation.PSCredential ($PluginManagerUser, $securePassword)
                                 Write-LogMessage -type Info -MSG "Running test command using password from the vault with windows user '$PluginManagerUser'"
                                 # Run generic command in AD
@@ -2157,8 +2376,8 @@ return
 # SIG # Begin signature block
 # MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDRmKYlUjSMQ0ZI
-# PWsylAst7Dz85irhVhBAVDVzsP6iPKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDp/hY940vIs2zI
+# 4Cow6kYQH2xFoL8VsYEcJWF/7q0MVKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -2293,22 +2512,22 @@ return
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIGVG+9P6X7ENC/fyD5W4VSzuikjFumhJk8Ubov4eGBmdMA0GCSqGSIb3
-# DQEBAQUABIICAAGWXAu/0gmngc9iOm7+MFpv/Ao4ewPD/Y+JHpqqrFApIE3Xcedt
-# YD2mQVcUrhnlgcW/ZX3fLHWq37fCJ6HWprBhD/8gLCg6eTi96gIa7XMsiwBE9wNO
-# pFhs8Y4rCE7s7flliQCKUyC3yIDc/mrpF+AvJ/kqN7dDPbA2Y+ZEwDsQU9WRLjoh
-# 59b5yK2qqzhbhHX46uyGlyX2CBwG/iroP66y7i+JO3BAJOIYWtlgoBU0wTYc55/e
-# uM0V+ZyKRgNFT/nUroechkQBpysxuRHAALXgt9E2sD7AGKy0vOVYETZChr2oc2HF
-# eA3X2S65wA4zSLVWswv3caLeEO0swlfeY9nkIzzFyNdx55MxpQv/zXNASCTjPEN5
-# axVKe3OQfFU4BWIG+lcsFI80fr4sS0uFE1ivo6JY4NEyEtUUBK0+vfrUvmL1uGR3
-# +doe5ZAODJz9GQLErIm2opLBykCuDRiVRkKKql5J+X/gOLLC0r34Pvfd6nBIB4a1
-# zD1lczZ0xjmhk4vTzG5FDOvMrWL315syFSJvlE+SBIY6HKMOMMWCTC0H2C0kmtg/
-# khJIptQKUjctf158CZ+ohfJsbU5kiP6PzokdnM82CkSuGG71mwpmQEZW14RkGoI9
-# JIJvGtvqkAkrQMbQ7Grj1fuMrJw9l18XyJnNPUzPQ1SRYN/l1I3qPHW0oYIOLDCC
+# AQkEMSIEIJpYn/7V2Bl5XNKfjmBBhAWuVEO6zqALZfntDrhemDr8MA0GCSqGSIb3
+# DQEBAQUABIICAGqHEQAD6Uy3Rqa4EaGSg4uEqdXN9ta0+a/OMxWRDX1u4xWCQ/NY
+# Dm6cf22+srnh/KEnkvPbPK0IZSShMoXmAZJpaS4GfDiYb1X0tK4nJFpFYtiGQwBv
+# gYegt/tSqhnNEAGYhxr26BzsC7TmIkVGHBxYCTII87edQlvlALe9Q+pe+HfSUbrn
+# /TORHl2jC/I5D8t5Y3BhPk8REAJjHNaNGDYKjVOipcto546fM7/f+3kqBUFTCdk7
+# ecGa+MvZl+V5XTDwBb6XAmRYXnlp1emf12Y5PfcFpCPgVXEpNllo70wSwHDw5uRz
+# QkgqyIwpnCDh889SvtSLJZwBM/a4WjW5Etn+rM0xCdwJfCSQXgwiACrIdh8XSgFG
+# 7Mf20AhbNUzq0I+PfhEgG1kSBukrWPXqa2Y5Kl6eFnQy9DMy+TmXHp0b+GIGmG+C
+# MaxK8E4MY1M0jL/tfj+US4SiJCYh4RQyCdps++kTOejdEfTNZ+g4b864aY9ICRiW
+# a6rr8tQD8Jy0gMLhRXdUUHZnNdNSWrESlARnAJzSgJSItfiV1un0Y5+3b1KwKA4H
+# x1gzS9Oo/F/0V9P6CrXjIC/FhrfH3Mkp9NGSHwi1EC5GLsOAl+9WLrdQ7z99b8aO
+# MkbzXjTqopBWnpn/afcWkqVHPNfjOG7BC/EA80Exf7eUrfKa31lIUdQeoYIOLDCC
 # DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
 # BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFOij1eodlr95eBho46Vfx8K88NsZAhUA6QO6JAH/
-# GoSHjhgyZaetiTlbj1UYDzIwMjQwMjI1MTU1MDAxWjADAgEeoIGGpIGDMIGAMQsw
+# AQcXAzAhMAkGBSsOAwIaBQAEFEx+eu76pNsUGRjU03TmueC3Xsa6AhUA95MSb6zt
+# 6hShcocRhHdiQ6nSWrsYDzIwMjQwMzA3MjMzMTI3WjADAgEeoIGGpIGDMIGAMQsw
 # CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
 # BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
 # QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
@@ -2372,13 +2591,13 @@ return
 # cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
 # BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
 # BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMjI1MTU1MDAxWjAvBgkqhkiG9w0BCQQxIgQg
-# /s0D+aWarOxMdifgXaBPQNjetfGqiGXvdG2JiIKOzGkwNwYLKoZIhvcNAQkQAi8x
+# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMzA3MjMzMTI3WjAvBgkqhkiG9w0BCQQxIgQg
+# Q7HL21zRBz7KzK4GrkzVGEINeAL+Z21jnPITFxj7XPIwNwYLKoZIhvcNAQkQAi8x
 # KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBACaN8WNbLeDCAxDvTcSASgdDBX5d0LMNQOCgtK4FxWOckrlw9WQm
-# 5yp796pR6Jvv03OgLsV51dWXP3ugSvW+PEiGVVaiVxviOujFNAwEJat4KnRNkajA
-# gkslCIoKqVaZw/OHZIrv+PXeMlrCuQcYc5VvnDQfTSr/WIzKve+AVTazGfFEXrF4
-# PZI65pR2ZeiuycArC47vWAzMNc8dzCIvD1mEkw/pl6q+JKuXhyaCTGihtaSBqQLk
-# hVAW7+IeVmYKCQKymUOQEhXd4q8N7NtIyhu97nXRqbcIUwyaT1uOFeCKWNgBjVKm
-# uTn9uxTIBPws8QHpAtjKvZLg1ej/Vs/Sa+Q=
+# hvcNAQEBBIIBAEola1X31RryLXsh3Hu8YCOMiIJTjZW2wTwYg9Me/Xgo0Pr90U2p
+# mAvDFsEALKdfAE8UvSzKCQgQENeNDzpvtT0tKkXmPMwnrwJNZO9BB6tA9SrVMWpK
+# g6gIBGiFJDH4uO8kiLJWx1kJRm0QK3fQMU6a8y3tfH893ZZaZ0CcYxFWDonXBO0x
+# nYcDabvrdwQfdfaZz9cu1h+DmnNzJlkWJ7/nrqB5hxmt4UqtHZ+vl7mhnGfiII+J
+# N5RGeaOGDPhGj92u89pVin2VATekAiXqgyeD+oP52oNim5iFV+M3+niPgTBNa9x0
+# 2ihJP3Rkun3i6nbgYvkb7LY1ydrtiSHABqQ=
 # SIG # End signature block
