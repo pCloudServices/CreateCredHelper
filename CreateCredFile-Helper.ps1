@@ -33,7 +33,7 @@ $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 
 # Script Version
-$ScriptVersion = "3.2"
+$ScriptVersion = "3.4"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1416,7 +1416,7 @@ Function Start-CYBRService
         $CARunning = "Running"
         $Service = Get-Service $ServiceName
         $service.Start()
-        $Service.WaitForStatus($CARunning,'00:00:20')
+        $Service.WaitForStatus($CARunning,'00:00:40')
         $service.refresh()
         $ServiceStatus = Get-Service -Name $Service.Name | Select-Object -ExpandProperty status
         if($ServiceStatus -eq $CARunning){
@@ -1430,39 +1430,57 @@ Function Start-CYBRService
     }
 }
 
-Function enforceTLS{
-    # Check if SecurityProtocol is SystemDefault or matches tls12
+Function enforceTLS {
+    # Check the current SecurityProtocol setting
     $securityProtocol = [Net.ServicePointManager]::SecurityProtocol
-    $isSystemDefault = $securityProtocol -eq 'SystemDefault'
-    $isTLS12 = $securityProtocol -match 'Tls12'
+	if ($securityProtocol -ne 'SystemDefault' -and $securityProtocol -notmatch 'Tls12') {
+        Write-LogMessage -type Info -MSG "Detected SecurityProtocol not highest settings ('$($securityProtocol)'), enforcing TLS 1.2."
+		[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+	}
+        # Registry checks for .NET Framework strong cryptography settings
+        $GetTLSReg86 = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319' -Name "SchUseStrongCrypto" -ErrorAction SilentlyContinue
+        $GetTLSReg64 = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319' -Name "SchUseStrongCrypto" -ErrorAction SilentlyContinue
+        
+        # Registry checks for TLS 1.2 being explicitly disabled in Client and Server
+        $Gettls12ClientValue = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client" -Name "Enabled" -ErrorAction SilentlyContinue
+        $Gettls12ServerValue = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server" -Name "Enabled" -ErrorAction SilentlyContinue
 
-    # Check .NET Framework registry settings for SchUseStrongCrypto
-    $GetTLSReg86 = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319').SchUseStrongCrypto -eq 1
-    $GetTLSReg64 = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319').SchUseStrongCrypto -eq 1
+        $gettls12ClientDefaultDisabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client" -Name "DisabledByDefault" -ErrorAction SilentlyContinue
+        $gettls12ServerDefaultDisabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server" -Name "DisabledByDefault" -ErrorAction SilentlyContinue
 
-    # Additional registry checks for TLS 1.2 Client and Server
-    $tls12ClientEnabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client" -Name "Enabled" -ErrorAction SilentlyContinue
-    $tls12ServerEnabled = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server" -Name "Enabled" -ErrorAction SilentlyContinue
+        $TLSReg86 = $GetTLSReg86 -ne $null -and $GetTLSReg86.SchUseStrongCrypto -eq 0
+        $TLSReg64 = $GetTLSReg64 -ne $null -and $GetTLSReg64.SchUseStrongCrypto -eq 0
+        $tls12ClientValue = $Gettls12ClientValue -ne $null -and $Gettls12ClientValue.Enabled -eq 0
+        $tls12ServerValue = $Gettls12ServerValue -ne $null -and $Gettls12ServerValue.Enabled -eq 0
+        $tls12ClientDefaultDisabled = $gettls12ClientDefaultDisabled -ne $null -and $gettls12ClientDefaultDisabled.DisabledByDefault -eq 1
+        $tls12ServerDefaultDisabled = $gettls12ServerDefaultDisabled -ne $null -and $gettls12ServerDefaultDisabled.DisabledByDefault -eq 1
 
-    $isClientEnabled = $tls12ClientEnabled.Enabled -eq 1 -or $tls12ClientEnabled.Enabled -eq $null
-    $isServerEnabled = $tls12ServerEnabled.Enabled -eq 1 -or $tls12ServerEnabled.Enabled -eq $null
+        if ($TLSReg86 -or $TLSReg64 -or $tls12ClientValue -or $tls12ServerValue -or $tls12ClientDefaultDisabled -or $tls12ServerDefaultDisabled) {
+            Write-LogMessage -Type Info -MSG "Adjusting settings to ensure TLS 1.2 is not explicitly disabled and strong cryptography is enforced."
+            if ($TLSReg86) {
+                Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value 1 -Type DWord -Force -Verbose
+            }
+            if ($TLSReg64) {
+                Set-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value 1 -Type DWord -Force -Verbose
+            }
+            if ($tls12ClientValue) {
+                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client" -Name "Enabled" -Value 1 -Type DWord -Force -Verbose
+            }
+            if ($tls12ServerValue) {
+                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server" -Name "Enabled" -Value 1 -Type DWord -Force -Verbose
+            }
+            if ($tls12ClientDefaultDisabled) {
+                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client" -Name "DisabledByDefault" -Value 0 -Type DWord -Force -Verbose
+            }
+            if ($tls12ServerDefaultDisabled) {
+                Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Server" -Name "DisabledByDefault" -Value 0 -Type DWord -Force -Verbose
+            }
 
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-
-    # Logic to handle SystemDefault or incorrect TLS 1.2 settings
-    if (-not $isTLS12 -and -not $isSystemDefault) {
-        Write-LogMessage -Type Info -MSG "Detected TLS12 is not enforced, enforcing it via registry"
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value 1 -Type DWord -Force -Verbose
-        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NetFramework\v4.0.30319' -Name 'SchUseStrongCrypto' -Value 1 -Type DWord -Force -Verbose
-        Write-LogMessage -Type Info -MSG "Please restart the machine for changes to take effect. If this error keeps repeating, rerun the script with -skipTLS flag"
-        Pause
-        Stop-Process -Id $PID
-    } elseif ($isSystemDefault -and -not ($GetTLSReg86 -and $GetTLSReg64 -and $isClientEnabled -and $isServerEnabled)) {
-        Write-LogMessage -Type Info -MSG "SystemDefault is set but registry settings for TLS 1.2 Client/Server are not properly configured. Configuring now."
-        # Add logic here to set the registry settings for TLS 1.2 Client and Server, if necessary
-    } else {
-        Write-LogMessage -Type Info -MSG "TLS 1.2 is properly configured."
-    }
+            Write-LogMessage -Type Warning -MSG "Settings adjusted. Please RESTART the system for the changes to take effect."
+            Write-LogMessage -Type Warning -MSG "If this check keeps looping, you can skip it with -skipTLS flag when running the script."
+        } else {
+            Write-LogMessage -Type Info -MSG "TLS 1.2 is properly configured."
+        }
 }
 
 Function IgnoreCert {
@@ -1577,7 +1595,7 @@ Function Test-SystemLogs
     # Need to wait a few seconds because CPM logs are cleared twice after restart
     Start-Sleep -Seconds 5
     # Check the log is not empty
-    if(![string]::IsNullOrEmpty($(Get-Content -Path $LogPath)))
+    if (![string]::IsNullOrEmpty($(Get-Content -Path $LogPath)) -and (Select-String -Path $LogPath -Pattern "error" -Quiet))
     {
         Write-LogMessage -type Error -Msg "$ComponentID Log '$LogPath' has some errors, please check it."
         $retResult = $False
@@ -1867,7 +1885,7 @@ Function Invoke-ResetCredFile
                         $ComponentUser = $foundUser
                         #If the $CredFile is psmgw.cred then we split the SystemHealth PSM App user into 2 strings and replace "PSMApp_blabla" with "PSMgw_blabla" so we also reset the gw cred.
                             If ($credFile -like "*psmgw.cred*"){
-                            $ComponentUser = "PSMGw_"+$foundUser.split("_")[1]
+								$ComponentUser = "PSMGw_"+$foundUser.split("_")[1]
                             }
                         Break
                     }
@@ -1882,11 +1900,13 @@ Function Invoke-ResetCredFile
             Invoke-GenerateCredFile @generateCredFileParameters -FileName $credFile -ComponentUser $ComponentUser
             # Reset User pw in the vault and activate it
             Get-UserAndResetPassword -ComponentUser $ComponentUser -UserType $Component.UserType -NewPassword $generatedPassword
-            #extract CPM component name to script score so we can use it for apikey reset.
-            if($typeChosen.UserType -eq "CPM"){
-                $global:apiKeyUsername = $ComponentUser
-                $global:apiKeyPath = $Component.Path
-            }
+            #expose variable for apikey reset function.
+			if(-not($ComponentUser -like "PSMGw_*"))
+			{ # if PSM user is GW skip it from being exposed for apikey use.
+				$global:apiKeyUsername = $ComponentUser
+				$global:apiKeyPath = $Component.Path
+			}
+
         }
         # For cases where there is more than one service to start
         Foreach($svc in $Component.ServiceName)
@@ -2135,8 +2155,17 @@ Function Invoke-ResetAPIKey
         [Parameter(Mandatory=$true)]
         [string]$apiUser,
         [Parameter(Mandatory=$true)]
-        [string]$AdminUser
+        [string]$AdminUser,
+		[Parameter(Mandatory = $False)]
+		[ValidateSet("CPM","PSM")]
+		[string]$ComponentType
     )
+	
+if($ComponentType -eq "CPM"){
+	$apikeyFileName = "apikey.ini"
+}Else{
+	$apikeyFileName = "apigw.cred"
+}
 
 Add-Type -AssemblyName System.Windows.Forms
 $wshell = New-Object -ComObject wscript.shell
@@ -2145,7 +2174,7 @@ $ApiLogs = "$pathApiKey`Vault\Logs\ApiKeyManager.log"
 #Purge logs before execution
 Remove-Item $ApiLogs -Force -ErrorAction SilentlyContinue
 
-Write-LogMessage -type Info -MSG "Resetting CPM Scanner ApiKey, this can take a few secs..."
+Write-LogMessage -type Info -MSG "Resetting ApiKey, this can take a few secs..."
 Write-LogMessage -type Info -MSG "Testing if SendWait function will work..."
 $dummyString = "Test"
 $teststring = $null
@@ -2180,13 +2209,13 @@ if($teststring){
     $wshell.AppActivate('Privilege Cloud CreateCredFile-Helper') | Out-Null
     [System.Windows.Forms.SendKeys]::SendWait($simplePw)
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-    & "$pathApikey\Vault\ApiKeyManager.exe" add -f "$pathApikey`Vault\apikey.ini" -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
+    & "$pathApikey\Vault\ApiKeyManager.exe" add -f "$pathApikey`Vault\$apikeyFileName" -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
 }
 Else{
 Write-LogMessage -type Warning -Msg "Error Powershell's SendWait command doesn't work, probably because you have Endpoint agent blocking this action."
 Write-LogMessage -type Warning -Msg "You will have to input your administrative account manually (the same account pw you input at the start of the script)."
 & "$pathApikey\Vault\ApiKeyManager.exe" revoke -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
-& "$pathApikey\Vault\ApiKeyManager.exe" add -f "$pathApikey`Vault\apikey.ini" -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
+& "$pathApikey\Vault\ApiKeyManager.exe" add -f "$pathApikey`Vault\$apikeyFileName" -t $apiUser -u $AdminUser -a "$URL_PVWAAPI/"
 }
 
 if(gc $ApiLogs | Select-String "ERROR"){
@@ -2344,19 +2373,33 @@ try{
                         Write-LogMessage -type Warning -MSG "Old CPM version detected, can't perform $PluginManagerUser Sync action, do it manually by contacting CyberArk Support if the user is out of sync."
                     }
                         # Reset APIKey
-                        $decisionAPIKey = Get-Choice -Title "Would you like to also reset CPM Scanner APIKey?" -Options "Yes (Recommended)", "No" -DefaultChoice 1
+                        $decisionAPIKey = Get-Choice -Title "(Optional) Would you like to also reset CPM Scanner APIKey?" -Options "Yes", "No" -DefaultChoice 1
                         if ($decisionAPIKey -eq "No") {
                             Write-LogMessage -Type info -MSG "Selected not to run CPM Scanner APIKey reset."
                             # Scanner service
                             Start-CYBRService -ServiceName $typeChosen.ServiceName[1]
                         } else {
-                            Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $Credentials.UserName
+                            Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $Credentials.UserName -ComponentType CPM
                             # Scanner service
                             Start-CYBRService -ServiceName $typeChosen.ServiceName[1]
                             $Credentials = $null
                         }
-                }     
+                }
+				"PSM"
+				{
+						$decisionAPIKey = Get-Choice -Title "(Optional )Would you like to also reset PSM APIKey?" -Options "Yes", "No" -DefaultChoice 1
+                        if ($decisionAPIKey -eq "No") {
+                            Write-LogMessage -Type info -MSG "Selected not to run PSM Scanner APIKey reset."
+                        } else {
+							Stop-CYBRService -ServiceName $typeChosen.ServiceName
+                            Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $Credentials.UserName -ComponentType PSM
+                            Start-CYBRService -ServiceName $typeChosen.ServiceName
+                            $Credentials = $null
+                        }
+				}
             }
+			# TODO maybe add logs check here instead?
+			#Test-SystemLogs -ComponentID $Component.Name -LogPath $Component.serviceLogs[0] | Out-Null
         }
     }
     else {
@@ -2374,10 +2417,10 @@ Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
 ###########
 # SIG # Begin signature block
-# MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIqRQYJKoZIhvcNAQcCoIIqNjCCKjICAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDp/hY940vIs2zI
-# 4Cow6kYQH2xFoL8VsYEcJWF/7q0MVKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCAlLz5b2ngH3ty
+# UwBWenzXBZLqNCMDXaHgRPuf3tiHJ6CCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -2507,97 +2550,97 @@ return
 # oZ6wZE9s0guXjXwwWfgQ9BSrEHnVIyKEhzKq7r7eo6VyjwOzLXLSALQdzH66cNk+
 # w3yT6uG543Ydes+QAnZuwQl3tp0/LjbcUpsDttEI5zp1Y4UfU4YA18QbRGPD1F9y
 # wjzg6QqlDtFeV2kohxa5pgyV9jOyX4/x0mu74qADxWHsZNVvlRLMUZ4zI4y3KvX8
-# vZsjJFVKIsvyCgyXgNMM5Z4xghFFMIIRQQIBATBsMFwxCzAJBgNVBAYTAkJFMRkw
+# vZsjJFVKIsvyCgyXgNMM5Z4xghFEMIIRQAIBATBsMFwxCzAJBgNVBAYTAkJFMRkw
 # FwYDVQQKExBHbG9iYWxTaWduIG52LXNhMTIwMAYDVQQDEylHbG9iYWxTaWduIEdD
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIJpYn/7V2Bl5XNKfjmBBhAWuVEO6zqALZfntDrhemDr8MA0GCSqGSIb3
-# DQEBAQUABIICAGqHEQAD6Uy3Rqa4EaGSg4uEqdXN9ta0+a/OMxWRDX1u4xWCQ/NY
-# Dm6cf22+srnh/KEnkvPbPK0IZSShMoXmAZJpaS4GfDiYb1X0tK4nJFpFYtiGQwBv
-# gYegt/tSqhnNEAGYhxr26BzsC7TmIkVGHBxYCTII87edQlvlALe9Q+pe+HfSUbrn
-# /TORHl2jC/I5D8t5Y3BhPk8REAJjHNaNGDYKjVOipcto546fM7/f+3kqBUFTCdk7
-# ecGa+MvZl+V5XTDwBb6XAmRYXnlp1emf12Y5PfcFpCPgVXEpNllo70wSwHDw5uRz
-# QkgqyIwpnCDh889SvtSLJZwBM/a4WjW5Etn+rM0xCdwJfCSQXgwiACrIdh8XSgFG
-# 7Mf20AhbNUzq0I+PfhEgG1kSBukrWPXqa2Y5Kl6eFnQy9DMy+TmXHp0b+GIGmG+C
-# MaxK8E4MY1M0jL/tfj+US4SiJCYh4RQyCdps++kTOejdEfTNZ+g4b864aY9ICRiW
-# a6rr8tQD8Jy0gMLhRXdUUHZnNdNSWrESlARnAJzSgJSItfiV1un0Y5+3b1KwKA4H
-# x1gzS9Oo/F/0V9P6CrXjIC/FhrfH3Mkp9NGSHwi1EC5GLsOAl+9WLrdQ7z99b8aO
-# MkbzXjTqopBWnpn/afcWkqVHPNfjOG7BC/EA80Exf7eUrfKa31lIUdQeoYIOLDCC
-# DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
-# BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFEx+eu76pNsUGRjU03TmueC3Xsa6AhUA95MSb6zt
-# 6hShcocRhHdiQ6nSWrsYDzIwMjQwMzA3MjMzMTI3WjADAgEeoIGGpIGDMIGAMQsw
-# CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
-# BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
-# QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
-# ewWx1EloUUT3yYnSnBmdEjANBgkqhkiG9w0BAQsFADCBvTELMAkGA1UEBhMCVVMx
-# FzAVBgNVBAoTDlZlcmlTaWduLCBJbmMuMR8wHQYDVQQLExZWZXJpU2lnbiBUcnVz
-# dCBOZXR3b3JrMTowOAYDVQQLEzEoYykgMjAwOCBWZXJpU2lnbiwgSW5jLiAtIEZv
-# ciBhdXRob3JpemVkIHVzZSBvbmx5MTgwNgYDVQQDEy9WZXJpU2lnbiBVbml2ZXJz
-# YWwgUm9vdCBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTAeFw0xNjAxMTIwMDAwMDBa
-# Fw0zMTAxMTEyMzU5NTlaMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRl
-# YyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEo
-# MCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQTCCASIwDQYJ
-# KoZIhvcNAQEBBQADggEPADCCAQoCggEBALtZnVlVT52Mcl0agaLrVfOwAa08cawy
-# jwVrhponADKXak3JZBRLKbvC2Sm5Luxjs+HPPwtWkPhiG37rpgfi3n9ebUA41JEG
-# 50F8eRzLy60bv9iVkfPw7mz4rZY5Ln/BJ7h4OcWEpe3tr4eOzo3HberSmLU6Hx45
-# ncP0mqj0hOHE0XxxxgYptD/kgw0mw3sIPk35CrczSf/KO9T1sptL4YiZGvXA6TMU
-# 1t/HgNuR7v68kldyd/TNqMz+CfWTN76ViGrF3PSxS9TO6AmRX7WEeTWKeKwZMo8j
-# wTJBG1kOqT6xzPnWK++32OTVHW0ROpL2k8mc40juu1MO1DaXhnjFoTcCAwEAAaOC
-# AXcwggFzMA4GA1UdDwEB/wQEAwIBBjASBgNVHRMBAf8ECDAGAQH/AgEAMGYGA1Ud
-# IARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0cHM6Ly9kLnN5
-# bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5bWNiLmNvbS9y
-# cGEwLgYIKwYBBQUHAQEEIjAgMB4GCCsGAQUFBzABhhJodHRwOi8vcy5zeW1jZC5j
-# b20wNgYDVR0fBC8wLTAroCmgJ4YlaHR0cDovL3Muc3ltY2IuY29tL3VuaXZlcnNh
-# bC1yb290LmNybDATBgNVHSUEDDAKBggrBgEFBQcDCDAoBgNVHREEITAfpB0wGzEZ
-# MBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtMzAdBgNVHQ4EFgQUr2PWyqNOhXLgp7xB
-# 8ymiOH+AdWIwHwYDVR0jBBgwFoAUtnf6aUhHn1MS1cLqBzJ2B9GXBxkwDQYJKoZI
-# hvcNAQELBQADggEBAHXqsC3VNBlcMkX+DuHUT6Z4wW/X6t3cT/OhyIGI96ePFeZA
-# Ka3mXfSi2VZkhHEwKt0eYRdmIFYGmBmNXXHy+Je8Cf0ckUfJ4uiNA/vMkC/WCmxO
-# M+zWtJPITJBjSDlAIcTd1m6JmDy1mJfoqQa3CcmPU1dBkC/hHk1O3MoQeGxCbvC2
-# xfhhXFL1TvZrjfdKer7zzf0D19n2A6gP41P3CnXsxnUuqmaFBJm3+AZX4cYO9uiv
-# 2uybGB+queM6AL/OipTLAduexzi7D1Kr0eOUA2AKTaD+J20UMvw/l0Dhv5mJ2+Q5
-# FL3a5NPD6itas5VYVQR9x5rsIwONhSrS/66pYYEwggVLMIIEM6ADAgECAhB71OWv
-# uswHP6EBIwQiQU0SMA0GCSqGSIb3DQEBCwUAMHcxCzAJBgNVBAYTAlVTMR0wGwYD
-# VQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1
-# c3QgTmV0d29yazEoMCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGlu
-# ZyBDQTAeFw0xNzEyMjMwMDAwMDBaFw0yOTAzMjIyMzU5NTlaMIGAMQswCQYDVQQG
-# EwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5
-# bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBU
-# aW1lU3RhbXBpbmcgU2lnbmVyIC0gRzMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw
-# ggEKAoIBAQCvDoqq+Ny/aXtUF3FHCb2NPIH4dBV3Z5Cc/d5OAp5LdvblNj5l1SQg
-# bTD53R2D6T8nSjNObRaK5I1AjSKqvqcLG9IHtjy1GiQo+BtyUT3ICYgmCDr5+kMj
-# dUdwDLNfW48IHXJIV2VNrwI8QPf03TI4kz/lLKbzWSPLgN4TTfkQyaoKGGxVYVfR
-# 8QIsxLWr8mwj0p8NDxlsrYViaf1OhcGKUjGrW9jJdFLjV2wiv1V/b8oGqz9KtyJ2
-# ZezsNvKWlYEmLP27mKoBONOvJUCbCVPwKVeFWF7qhUhBIYfl3rTTJrJ7QFNYeY5S
-# MQZNlANFxM48A+y3API6IsW0b+XvsIqbAgMBAAGjggHHMIIBwzAMBgNVHRMBAf8E
-# AjAAMGYGA1UdIARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0
-# cHM6Ly9kLnN5bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5
-# bWNiLmNvbS9ycGEwQAYDVR0fBDkwNzA1oDOgMYYvaHR0cDovL3RzLWNybC53cy5z
-# eW1hbnRlYy5jb20vc2hhMjU2LXRzcy1jYS5jcmwwFgYDVR0lAQH/BAwwCgYIKwYB
-# BQUHAwgwDgYDVR0PAQH/BAQDAgeAMHcGCCsGAQUFBwEBBGswaTAqBggrBgEFBQcw
-# AYYeaHR0cDovL3RzLW9jc3Aud3Muc3ltYW50ZWMuY29tMDsGCCsGAQUFBzAChi9o
-# dHRwOi8vdHMtYWlhLndzLnN5bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNlcjAo
-# BgNVHREEITAfpB0wGzEZMBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtNjAdBgNVHQ4E
-# FgQUpRMBqZ+FzBtuFh5fOzGqeTYAex0wHwYDVR0jBBgwFoAUr2PWyqNOhXLgp7xB
-# 8ymiOH+AdWIwDQYJKoZIhvcNAQELBQADggEBAEaer/C4ol+imUjPqCdLIc2yuaZy
-# cGMv41UpezlGTud+ZQZYi7xXipINCNgQujYk+gp7+zvTYr9KlBXmgtuKVG3/KP5n
-# z3E/5jMJ2aJZEPQeSv5lzN7Ua+NSKXUASiulzMub6KlN97QXWZJBw7c/hub2wH9E
-# PEZcF1rjpDvVaSbVIX3hgGd+Yqy3Ti4VmuWcI69bEepxqUH5DXk4qaENz7Sx2j6a
-# escixXTN30cJhsT8kSWyG5bphQjo3ep0YG5gpVZ6DchEWNzm+UgUnuW/3gC9d7GY
-# FHIUJN/HESwfAD/DSxTGZxzMHgajkF9cVIs+4zNbgg/Ft4YCTnGf6WZFP3YxggJa
-# MIICVgIBATCBizB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29y
-# cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
-# BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
-# BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMzA3MjMzMTI3WjAvBgkqhkiG9w0BCQQxIgQg
-# Q7HL21zRBz7KzK4GrkzVGEINeAL+Z21jnPITFxj7XPIwNwYLKoZIhvcNAQkQAi8x
-# KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAEola1X31RryLXsh3Hu8YCOMiIJTjZW2wTwYg9Me/Xgo0Pr90U2p
-# mAvDFsEALKdfAE8UvSzKCQgQENeNDzpvtT0tKkXmPMwnrwJNZO9BB6tA9SrVMWpK
-# g6gIBGiFJDH4uO8kiLJWx1kJRm0QK3fQMU6a8y3tfH893ZZaZ0CcYxFWDonXBO0x
-# nYcDabvrdwQfdfaZz9cu1h+DmnNzJlkWJ7/nrqB5hxmt4UqtHZ+vl7mhnGfiII+J
-# N5RGeaOGDPhGj92u89pVin2VATekAiXqgyeD+oP52oNim5iFV+M3+niPgTBNa9x0
-# 2ihJP3Rkun3i6nbgYvkb7LY1ydrtiSHABqQ=
+# AQkEMSIEIOL2XoGFrN+z1u7KTflHm4HAs6TdWlEXD1SGZ1RoEE/oMA0GCSqGSIb3
+# DQEBAQUABIICANOewvHDCtEfEqSOy2MAvD6iBP0nMJ9QiDn1+aKmR2zJdPkX+P+P
+# Rsyphh8W5qclb6y6T1R5+NDjGRtQnKKxtqQDwsah3x+ONAQsLAw2pc+PDGBrsPf8
+# uskcZvQBar48+XutK13koU4yCNpEAW2HfUQwAYZJEoQAvTi/+LDZYnZnw4ySFDia
+# NMJ9THkoWK9E7/USCWHkI01e2RK8KSUr6OCk+tlro28t/8UP0rgCNeqT+SdoRSZJ
+# SfjloIk8QWEuWTlMVg2Ktv/qUoYUuQ1HSU7dJCPOiTks2XQQTp8FCr16jxu178ta
+# A3tIPXeCihQCMWci7hEMQ32A2d0cnuP0jUwE0EZudd0KoZEfPUq8VPx2hS6B3Ai6
+# BwYzEaWSj4CbpFFz07axPDJZ9ocKLjjqmdMb85ZKScI3f/Mukut+ERkesNj6Adyk
+# 8a7uOjNdeJquliAK0QjoQ8mWSDL/lEiOn9lkGf/2mAlYFfGZ8JvsSopDIhcAvvq/
+# J1L1/IlwMnyToQRcOER6yEXVcAfZqSa3jR+qeN184drImFHftRjhlxKPO5a5jqGx
+# IwwwKgqENfg4ANGEXbI5kErrmOMR36AAhvkGTpe6D1Y8ke98Q7ddvCC7vWRbqmEM
+# Yuu8ol6YAu2EXXH9kfvKkEs6BIhb+TTgUD4TbXnNvnRxW+3rsmi2ectVoYIOKzCC
+# DicGCisGAQQBgjcDAwExgg4XMIIOEwYJKoZIhvcNAQcCoIIOBDCCDgACAQMxDTAL
+# BglghkgBZQMEAgEwgf4GCyqGSIb3DQEJEAEEoIHuBIHrMIHoAgEBBgtghkgBhvhF
+# AQcXAzAhMAkGBSsOAwIaBQAEFCNNoI9JDxCOUFUZCdvahz+vAOm0AhQ1HPahiL/0
+# xRzDrW6nFUV9T/YUGxgPMjAyNDAzMjIwMDE4MTlaMAMCAR6ggYakgYMwgYAxCzAJ
+# BgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UE
+# CxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazExMC8GA1UEAxMoU3ltYW50ZWMgU0hB
+# MjU2IFRpbWVTdGFtcGluZyBTaWduZXIgLSBHM6CCCoswggU4MIIEIKADAgECAhB7
+# BbHUSWhRRPfJidKcGZ0SMA0GCSqGSIb3DQEBCwUAMIG9MQswCQYDVQQGEwJVUzEX
+# MBUGA1UEChMOVmVyaVNpZ24sIEluYy4xHzAdBgNVBAsTFlZlcmlTaWduIFRydXN0
+# IE5ldHdvcmsxOjA4BgNVBAsTMShjKSAyMDA4IFZlcmlTaWduLCBJbmMuIC0gRm9y
+# IGF1dGhvcml6ZWQgdXNlIG9ubHkxODA2BgNVBAMTL1ZlcmlTaWduIFVuaXZlcnNh
+# bCBSb290IENlcnRpZmljYXRpb24gQXV0aG9yaXR5MB4XDTE2MDExMjAwMDAwMFoX
+# DTMxMDExMTIzNTk1OVowdzELMAkGA1UEBhMCVVMxHTAbBgNVBAoTFFN5bWFudGVj
+# IENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBUcnVzdCBOZXR3b3JrMSgw
+# JgYDVQQDEx9TeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1waW5nIENBMIIBIjANBgkq
+# hkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1mdWVVPnYxyXRqBoutV87ABrTxxrDKP
+# BWuGmicAMpdqTclkFEspu8LZKbku7GOz4c8/C1aQ+GIbfuumB+Lef15tQDjUkQbn
+# QXx5HMvLrRu/2JWR8/DubPitljkuf8EnuHg5xYSl7e2vh47Ojcdt6tKYtTofHjmd
+# w/SaqPSE4cTRfHHGBim0P+SDDSbDewg+TfkKtzNJ/8o71PWym0vhiJka9cDpMxTW
+# 38eA25Hu/rySV3J39M2ozP4J9ZM3vpWIasXc9LFL1M7oCZFftYR5NYp4rBkyjyPB
+# MkEbWQ6pPrHM+dYr77fY5NUdbRE6kvaTyZzjSO67Uw7UNpeGeMWhNwIDAQABo4IB
+# dzCCAXMwDgYDVR0PAQH/BAQDAgEGMBIGA1UdEwEB/wQIMAYBAf8CAQAwZgYDVR0g
+# BF8wXTBbBgtghkgBhvhFAQcXAzBMMCMGCCsGAQUFBwIBFhdodHRwczovL2Quc3lt
+# Y2IuY29tL2NwczAlBggrBgEFBQcCAjAZGhdodHRwczovL2Quc3ltY2IuY29tL3Jw
+# YTAuBggrBgEFBQcBAQQiMCAwHgYIKwYBBQUHMAGGEmh0dHA6Ly9zLnN5bWNkLmNv
+# bTA2BgNVHR8ELzAtMCugKaAnhiVodHRwOi8vcy5zeW1jYi5jb20vdW5pdmVyc2Fs
+# LXJvb3QuY3JsMBMGA1UdJQQMMAoGCCsGAQUFBwMIMCgGA1UdEQQhMB+kHTAbMRkw
+# FwYDVQQDExBUaW1lU3RhbXAtMjA0OC0zMB0GA1UdDgQWBBSvY9bKo06FcuCnvEHz
+# KaI4f4B1YjAfBgNVHSMEGDAWgBS2d/ppSEefUxLVwuoHMnYH0ZcHGTANBgkqhkiG
+# 9w0BAQsFAAOCAQEAdeqwLdU0GVwyRf4O4dRPpnjBb9fq3dxP86HIgYj3p48V5kAp
+# reZd9KLZVmSEcTAq3R5hF2YgVgaYGY1dcfL4l7wJ/RyRR8ni6I0D+8yQL9YKbE4z
+# 7Na0k8hMkGNIOUAhxN3WbomYPLWYl+ipBrcJyY9TV0GQL+EeTU7cyhB4bEJu8LbF
+# +GFcUvVO9muN90p6vvPN/QPX2fYDqA/jU/cKdezGdS6qZoUEmbf4Blfhxg726K/a
+# 7JsYH6q54zoAv86KlMsB257HOLsPUqvR45QDYApNoP4nbRQy/D+XQOG/mYnb5DkU
+# vdrk08PqK1qzlVhVBH3HmuwjA42FKtL/rqlhgTCCBUswggQzoAMCAQICEHvU5a+6
+# zAc/oQEjBCJBTRIwDQYJKoZIhvcNAQELBQAwdzELMAkGA1UEBhMCVVMxHTAbBgNV
+# BAoTFFN5bWFudGVjIENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBUcnVz
+# dCBOZXR3b3JrMSgwJgYDVQQDEx9TeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1waW5n
+# IENBMB4XDTE3MTIyMzAwMDAwMFoXDTI5MDMyMjIzNTk1OVowgYAxCzAJBgNVBAYT
+# AlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3lt
+# YW50ZWMgVHJ1c3QgTmV0d29yazExMC8GA1UEAxMoU3ltYW50ZWMgU0hBMjU2IFRp
+# bWVTdGFtcGluZyBTaWduZXIgLSBHMzCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC
+# AQoCggEBAK8Oiqr43L9pe1QXcUcJvY08gfh0FXdnkJz93k4Cnkt29uU2PmXVJCBt
+# MPndHYPpPydKM05tForkjUCNIqq+pwsb0ge2PLUaJCj4G3JRPcgJiCYIOvn6QyN1
+# R3AMs19bjwgdckhXZU2vAjxA9/TdMjiTP+UspvNZI8uA3hNN+RDJqgoYbFVhV9Hx
+# AizEtavybCPSnw0PGWythWJp/U6FwYpSMatb2Ml0UuNXbCK/VX9vygarP0q3InZl
+# 7Ow28paVgSYs/buYqgE4068lQJsJU/ApV4VYXuqFSEEhh+XetNMmsntAU1h5jlIx
+# Bk2UA0XEzjwD7LcA8joixbRv5e+wipsCAwEAAaOCAccwggHDMAwGA1UdEwEB/wQC
+# MAAwZgYDVR0gBF8wXTBbBgtghkgBhvhFAQcXAzBMMCMGCCsGAQUFBwIBFhdodHRw
+# czovL2Quc3ltY2IuY29tL2NwczAlBggrBgEFBQcCAjAZGhdodHRwczovL2Quc3lt
+# Y2IuY29tL3JwYTBABgNVHR8EOTA3MDWgM6Axhi9odHRwOi8vdHMtY3JsLndzLnN5
+# bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNybDAWBgNVHSUBAf8EDDAKBggrBgEF
+# BQcDCDAOBgNVHQ8BAf8EBAMCB4AwdwYIKwYBBQUHAQEEazBpMCoGCCsGAQUFBzAB
+# hh5odHRwOi8vdHMtb2NzcC53cy5zeW1hbnRlYy5jb20wOwYIKwYBBQUHMAKGL2h0
+# dHA6Ly90cy1haWEud3Muc3ltYW50ZWMuY29tL3NoYTI1Ni10c3MtY2EuY2VyMCgG
+# A1UdEQQhMB+kHTAbMRkwFwYDVQQDExBUaW1lU3RhbXAtMjA0OC02MB0GA1UdDgQW
+# BBSlEwGpn4XMG24WHl87Map5NgB7HTAfBgNVHSMEGDAWgBSvY9bKo06FcuCnvEHz
+# KaI4f4B1YjANBgkqhkiG9w0BAQsFAAOCAQEARp6v8LiiX6KZSM+oJ0shzbK5pnJw
+# Yy/jVSl7OUZO535lBliLvFeKkg0I2BC6NiT6Cnv7O9Niv0qUFeaC24pUbf8o/mfP
+# cT/mMwnZolkQ9B5K/mXM3tRr41IpdQBKK6XMy5voqU33tBdZkkHDtz+G5vbAf0Q8
+# RlwXWuOkO9VpJtUhfeGAZ35irLdOLhWa5Zwjr1sR6nGpQfkNeTipoQ3PtLHaPpp6
+# xyLFdM3fRwmGxPyRJbIblumFCOjd6nRgbmClVnoNyERY3Ob5SBSe5b/eAL13sZgU
+# chQk38cRLB8AP8NLFMZnHMweBqOQX1xUiz7jM1uCD8W3hgJOcZ/pZkU/djGCAlow
+# ggJWAgEBMIGLMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jw
+# b3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEoMCYGA1UE
+# AxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQQIQe9Tlr7rMBz+hASME
+# IkFNEjALBglghkgBZQMEAgGggaQwGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEE
+# MBwGCSqGSIb3DQEJBTEPFw0yNDAzMjIwMDE4MTlaMC8GCSqGSIb3DQEJBDEiBCDs
+# WqMBFDDLFvXrHOGAGbE8TKlGHU58Z2v8eUxOMJOCijA3BgsqhkiG9w0BCRACLzEo
+# MCYwJDAiBCDEdM52AH0COU4NpeTefBTGgPniggE8/vZT7123H99h+DALBgkqhkiG
+# 9w0BAQEEggEAWf8Gp+tIosIHBsbZ3E1TT82UxXNlWmbnK0cobVJvHYZp7tUzujgc
+# EFThbKMgFJXtzLTtfsjKe7sfHPY/d+uX9c/ZkJzQ0lKAG4WQgrN/BFVWK2LgAQ+i
+# kPzTylTCX1meLTtGwtQQ3gJqqHYjGSpl2IwvrgN5VOm+57/axUDQlHsz19Ri6BFg
+# M9q0cyQh0vtY2XaokK+C/sHTWHgH5Bdfj1UOi+4bqI5KAluCkOxawpxpl+SmLRhe
+# t8yip0WyFDnslkyPyj1398rmyIJ2S2P9fEbELng1x40fUnv8lEhTrcWpPaamJI2o
+# B4nONwiXVjV+MANQT575XK2wkQzFyf9BaA==
 # SIG # End signature block
