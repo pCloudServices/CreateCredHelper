@@ -31,9 +31,10 @@ param(
 
 $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
+$global:CPMnewSyncToolFolder = "$PSScriptRoot\SyncCPMCompUsers_neededFrom14.2+"
 
 # Script Version
-$ScriptVersion = "3.4"
+$ScriptVersion = "3.5"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -1410,13 +1411,14 @@ Function Start-CYBRService
         $ServiceName
     )
     try{
+        Write-LogMessage -type Info -MSG "Starting service '$ServiceName'..."
         #Check If need to Stop CPM or PSM
         $CAStarted = "Started"
         $CAStart = "Start"
         $CARunning = "Running"
         $Service = Get-Service $ServiceName
         $service.Start()
-        $Service.WaitForStatus($CARunning,'00:00:40')
+        $Service.WaitForStatus($CARunning,'00:01:59')
         $service.refresh()
         $ServiceStatus = Get-Service -Name $Service.Name | Select-Object -ExpandProperty status
         if($ServiceStatus -eq $CARunning){
@@ -1595,7 +1597,7 @@ Function Test-SystemLogs
     )
     $retResult = $true
     # Need to wait a few seconds because CPM logs are cleared twice after restart
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 7
     # Check the log is not empty
     if (![string]::IsNullOrEmpty($(Get-Content -Path $LogPath)) -and (Select-String -Path $LogPath -Pattern "error" -Quiet))
     {
@@ -1841,6 +1843,94 @@ Function Invoke-GenerateCredFile
     }
 }
 
+
+
+Function ResetCPMUserandAPIkeyNewMethdod(){ # Should only use from CPM 14.2+ since
+param(
+    [PSCredential]$Credentials,
+    [string]$cpmPAth,
+    [string]$apiUser
+)
+
+
+    $ComponentConfig = @{
+        VaultIniPath = "$($cpmPAth)Vault\Vault.ini"
+        Component = "cpm"
+        ComponentUsers = @(
+            @{
+                GenerateCredFile = $true
+                CredFilePath = "$($cpmPAth)Vault\user.ini"
+                APIGWFilePath = "$($cpmPAth)Vault\apikey.ini"
+                DisplayName = "CPM app user"
+                CompDefaultUsername = "$apiUser"
+            }
+        )
+        vaultAdminUsername = "$($Credentials.Username)"
+    }
+    
+    # Generate the JSON input file
+    $InputFile = "$CPMnewSyncToolFolder\SyncCompUsersInput.json"
+    $jsonContent = $ComponentConfig | ConvertTo-Json -Depth 3
+    
+    # Ensure the folder exists and overwrite the file if it exists
+    $InputFolder = [System.IO.Path]::GetDirectoryName($InputFile)
+    if (-not (Test-Path $InputFolder)) {
+        New-Item -Path $InputFolder -ItemType Directory | Out-Null
+    }
+    Set-Content -Path $InputFile -Value $jsonContent
+    
+    Write-LogMessage -type Info -MSG "Input JSON file created/updated at $InputFile"
+    
+
+    function RunProcess {
+        param (
+            [Parameter(Mandatory=$true)]
+            [string]$ProcessFullPath,
+    
+            [Parameter(Mandatory=$false)]
+            [string[]]$Args
+    
+        )
+        begin {
+            $processName = Split-Path -Leaf $ProcessFullPath
+            $processPath = Split-Path -Parent $ProcessFullPath
+        }
+        process {
+            $processArgs = ""
+            foreach ($item in $Args) {
+                $processArgs += "`"$item`" "
+            }
+    
+            [System.Environment]::SetEnvironmentVariable("VAULT_PASSWORD", $Credentials.GetNetworkCredential().Password)
+    
+    
+            $process = (Start-Process $ProcessName "$processArgs" -WorkingDirectory $processPath -Wait -WindowStyle Hidden -PassThru)
+            $processExitCode = $process.ExitCode.ToString()
+            [bool]$isSuccess = $false
+            if ($process.ExitCode -eq 0) {
+                Write-LogMessage -type Success -MSG "Process $processName finished successfully"
+            }
+            else {
+                Write-LogMessage -type Error -MSG "Process $processName failed with exit code $processExitCode"
+                Write-LogMessage -type Error -MSG "More info here: $CPMnewSyncToolFolder\Log\SyncCompUsers.log"
+            }
+        }
+    }
+    
+    
+    try {
+    
+        $args = @($InputFile, "yes")
+        $ExecutableFullPath = Resolve-Path $CPMnewSyncToolFolder\SyncCompUsers.exe
+    
+        RunProcess -ProcessFullPath $ExecutableFullPath -Args $args
+    }
+    catch {
+        Write-LogMessage -type Error -MSG "Failed to sync component users."
+        Write-LogMessage -type Error -MSG "$($_.Exception)"
+    }
+}
+
 Function Invoke-ResetCredFile
 {
     [CmdletBinding()]
@@ -1919,7 +2009,7 @@ Function Invoke-ResetCredFile
         }
         
         Get-SystemHealth -componentUserDetails $(Get-CredFileUser -File $Component.ComponentUser[0]) -ComponentID $Component.Name
-        Test-SystemLogs -ComponentID $Component.Name -LogPath $Component.serviceLogs[0] | Out-Null
+        #Test-SystemLogs -ComponentID $Component.Name -LogPath $Component.serviceLogs[0] | Out-Null
         #Invoke-Logoff
     } catch {
         Throw $(New-Object System.Exception ("Error in the flow of Resetting component $($Component.Name) credentials file.",$_.Exception))
@@ -2320,7 +2410,7 @@ try{
                                     
                                     Add-CALocalUser -userName $PluginManagerUser -userPassword $securePassword -userDescription "CyberArk Plugin Manager User used by CyberArk Password Manager service"
                                     # Retrieve PasswordManagerUser SID
-                                    $ntprincipal = new-object System.Security.Principal.NTAccount "PasswordManagerUser"
+                                    $ntprincipal = new-object System.Security.Principal.NTAccount "$PluginManagerUser"
                                     $userSid = $ntprincipal.Translate([System.Security.Principal.SecurityIdentifier])
                                     $userSidstr = $userSid.Value.ToString()
                                     # Retrieve PasswordManagerUser registry path
@@ -2381,15 +2471,29 @@ try{
                             # Scanner service
                             Start-CYBRService -ServiceName $typeChosen.ServiceName[1]
                         } else {
-                            Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $Credentials.UserName -ComponentType CPM
-                            # Scanner service
+                            # in 14.2 CPM deprecated apikeymanger tool and we need to use the new tool
+                            if($typeChosen.Version -ge [version]"14.2"){
+                                $syncCompAPpPath = "SyncCPMCompUsers_neededFrom14.2+"
+                                #check app exists
+                                if(Test-Path ".\$syncCompAPpPath"){
+                                    ResetCPMUserandAPIkeyNewMethdod -cpmPath $cpmPath -credential $Credentials -apiUser $apiKeyUsername
+                                }Else{
+                                    Write-LogMessage -type Error -MSG "Couldn't find folder $syncCompAPpPath make sure you download the latest zip from marketplace."
+                                    Write-LogMessage -type Error -MSG "Skipping API Key reset..."
+                                }
+                            }
+                            Else
+                            {
+                                Invoke-ResetAPIKey -pathApikey $apiKeyPath -apiUser $apiKeyUsername -AdminUser $Credentials.UserName -ComponentType CPM
+                            }
+                            # finally Scanner service
                             Start-CYBRService -ServiceName $typeChosen.ServiceName[1]
                             $Credentials = $null
                         }
                 }
 				"PSM"
 				{
-						$decisionAPIKey = Get-Choice -Title "(Optional )Would you like to also reset PSM APIKey?" -Options "Yes", "No" -DefaultChoice 1
+						$decisionAPIKey = Get-Choice -Title "(Optional )Would you like to also reset PSM APIKey?" -Options "Yes", "No" -DefaultChoice 2
                         if ($decisionAPIKey -eq "No") {
                             Write-LogMessage -Type info -MSG "Selected not to run PSM Scanner APIKey reset."
                         } else {
@@ -2401,7 +2505,7 @@ try{
 				}
             }
 			# TODO maybe add logs check here instead?
-			#Test-SystemLogs -ComponentID $Component.Name -LogPath $Component.serviceLogs[0] | Out-Null
+			Test-SystemLogs -ComponentID $typeChosen.Name -LogPath $typeChosen.serviceLogs[0] | Out-Null
         }
     }
     else {
@@ -2419,10 +2523,10 @@ Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
 ###########
 # SIG # Begin signature block
-# MIIqRgYJKoZIhvcNAQcCoIIqNzCCKjMCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIqRQYJKoZIhvcNAQcCoIIqNjCCKjICAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBVejrtXF93Fx3n
-# seRSSuynwwW+1z54U59n9ejTdBSJAaCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBo618jCDyeRa5M
+# gq6DXLKyKg0mOIRW7aZV/ZC3Vo1PJKCCGFcwggROMIIDNqADAgECAg0B7l8Wnf+X
 # NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
 # bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
 # YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
@@ -2552,97 +2656,97 @@ return
 # oZ6wZE9s0guXjXwwWfgQ9BSrEHnVIyKEhzKq7r7eo6VyjwOzLXLSALQdzH66cNk+
 # w3yT6uG543Ydes+QAnZuwQl3tp0/LjbcUpsDttEI5zp1Y4UfU4YA18QbRGPD1F9y
 # wjzg6QqlDtFeV2kohxa5pgyV9jOyX4/x0mu74qADxWHsZNVvlRLMUZ4zI4y3KvX8
-# vZsjJFVKIsvyCgyXgNMM5Z4xghFFMIIRQQIBATBsMFwxCzAJBgNVBAYTAkJFMRkw
+# vZsjJFVKIsvyCgyXgNMM5Z4xghFEMIIRQAIBATBsMFwxCzAJBgNVBAYTAkJFMRkw
 # FwYDVQQKExBHbG9iYWxTaWduIG52LXNhMTIwMAYDVQQDEylHbG9iYWxTaWduIEdD
 # QyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIMcE3E/BY6leBdVXwMMA0GCWCG
 # SAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisG
 # AQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcN
-# AQkEMSIEIFa7iUWbpyLaP02Hvlb4dKVxBgUPjaL6VO1X2ncVWiabMA0GCSqGSIb3
-# DQEBAQUABIICAOp1Csom+Sh3VyQ54Qn1O4jrAQHX8UgATfsmRZko2eEl+FYT12uc
-# tnk8NEFmLYwgn95e1Sdv8JoqBX1ncNHH/jJrVkATChMSAieNJHIsBvE5FtsWCAZx
-# vXfFZizvqZuCC9hT8mPSRXAxri+/p/Aehv1/+Vl7m6tmZ9Ty3780L6rNUL12xJDM
-# NnKI+LzbtwbpX8Gg5uYgSxpMOiz+Ani/Jq5MmLOW88X8f2HjkHcdqTDh584D/uVZ
-# dn89MSX+/HK1BAjiB28TrNI6mMsgNV7XqrPcx9Zhl72a1ZGf13o3U4XuFOsYQ3Ly
-# H9e7OZIVr74FfZBlvxb0J7U08Gy3eNJG+hhPKHTl7D+sHaoSFhTtTRcEUXr/u057
-# 6E1yZ4lP1bTlLOarAZFRMzz60ri2jLVB0MXQvL06DNzQMmcFUxMGg3H+slxZgdIP
-# 8jx4PgqGVj7AGB5alAj4ZDQNQylKv8/32QV0EXtqsbqnBbxLGwEJCg60qTKGOWkN
-# AEV5+irO1uQZhNMKCSU3ZP7UCqfE47d36iFJpLGjIO87/4Gg+a5zDFLR4mA6rFDu
-# 9ggG7mYfq8YSyCVPbOUwJYL2iRIzYRR+DSxKe0QRq2ZRPjC9aZPVs8BTVfh86AjR
-# 8sfgjaxtjM7VEa1ccgGNczjnfLpggbNjyynMP25NF9g1wn7Ue5PRgwndoYIOLDCC
-# DigGCisGAQQBgjcDAwExgg4YMIIOFAYJKoZIhvcNAQcCoIIOBTCCDgECAQMxDTAL
-# BglghkgBZQMEAgEwgf8GCyqGSIb3DQEJEAEEoIHvBIHsMIHpAgEBBgtghkgBhvhF
-# AQcXAzAhMAkGBSsOAwIaBQAEFLYrSdaIgzqRR4KiZlFwMZT8fwbiAhUA6Owfuh1I
-# 39e0st9PYIZYHgkxUZoYDzIwMjQwMzIyMDA1MzA3WjADAgEeoIGGpIGDMIGAMQsw
-# CQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNV
-# BAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNI
-# QTI1NiBUaW1lU3RhbXBpbmcgU2lnbmVyIC0gRzOgggqLMIIFODCCBCCgAwIBAgIQ
-# ewWx1EloUUT3yYnSnBmdEjANBgkqhkiG9w0BAQsFADCBvTELMAkGA1UEBhMCVVMx
-# FzAVBgNVBAoTDlZlcmlTaWduLCBJbmMuMR8wHQYDVQQLExZWZXJpU2lnbiBUcnVz
-# dCBOZXR3b3JrMTowOAYDVQQLEzEoYykgMjAwOCBWZXJpU2lnbiwgSW5jLiAtIEZv
-# ciBhdXRob3JpemVkIHVzZSBvbmx5MTgwNgYDVQQDEy9WZXJpU2lnbiBVbml2ZXJz
-# YWwgUm9vdCBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTAeFw0xNjAxMTIwMDAwMDBa
-# Fw0zMTAxMTEyMzU5NTlaMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRl
-# YyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEo
-# MCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQTCCASIwDQYJ
-# KoZIhvcNAQEBBQADggEPADCCAQoCggEBALtZnVlVT52Mcl0agaLrVfOwAa08cawy
-# jwVrhponADKXak3JZBRLKbvC2Sm5Luxjs+HPPwtWkPhiG37rpgfi3n9ebUA41JEG
-# 50F8eRzLy60bv9iVkfPw7mz4rZY5Ln/BJ7h4OcWEpe3tr4eOzo3HberSmLU6Hx45
-# ncP0mqj0hOHE0XxxxgYptD/kgw0mw3sIPk35CrczSf/KO9T1sptL4YiZGvXA6TMU
-# 1t/HgNuR7v68kldyd/TNqMz+CfWTN76ViGrF3PSxS9TO6AmRX7WEeTWKeKwZMo8j
-# wTJBG1kOqT6xzPnWK++32OTVHW0ROpL2k8mc40juu1MO1DaXhnjFoTcCAwEAAaOC
-# AXcwggFzMA4GA1UdDwEB/wQEAwIBBjASBgNVHRMBAf8ECDAGAQH/AgEAMGYGA1Ud
-# IARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0cHM6Ly9kLnN5
-# bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5bWNiLmNvbS9y
-# cGEwLgYIKwYBBQUHAQEEIjAgMB4GCCsGAQUFBzABhhJodHRwOi8vcy5zeW1jZC5j
-# b20wNgYDVR0fBC8wLTAroCmgJ4YlaHR0cDovL3Muc3ltY2IuY29tL3VuaXZlcnNh
-# bC1yb290LmNybDATBgNVHSUEDDAKBggrBgEFBQcDCDAoBgNVHREEITAfpB0wGzEZ
-# MBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtMzAdBgNVHQ4EFgQUr2PWyqNOhXLgp7xB
-# 8ymiOH+AdWIwHwYDVR0jBBgwFoAUtnf6aUhHn1MS1cLqBzJ2B9GXBxkwDQYJKoZI
-# hvcNAQELBQADggEBAHXqsC3VNBlcMkX+DuHUT6Z4wW/X6t3cT/OhyIGI96ePFeZA
-# Ka3mXfSi2VZkhHEwKt0eYRdmIFYGmBmNXXHy+Je8Cf0ckUfJ4uiNA/vMkC/WCmxO
-# M+zWtJPITJBjSDlAIcTd1m6JmDy1mJfoqQa3CcmPU1dBkC/hHk1O3MoQeGxCbvC2
-# xfhhXFL1TvZrjfdKer7zzf0D19n2A6gP41P3CnXsxnUuqmaFBJm3+AZX4cYO9uiv
-# 2uybGB+queM6AL/OipTLAduexzi7D1Kr0eOUA2AKTaD+J20UMvw/l0Dhv5mJ2+Q5
-# FL3a5NPD6itas5VYVQR9x5rsIwONhSrS/66pYYEwggVLMIIEM6ADAgECAhB71OWv
-# uswHP6EBIwQiQU0SMA0GCSqGSIb3DQEBCwUAMHcxCzAJBgNVBAYTAlVTMR0wGwYD
-# VQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1
-# c3QgTmV0d29yazEoMCYGA1UEAxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGlu
-# ZyBDQTAeFw0xNzEyMjMwMDAwMDBaFw0yOTAzMjIyMzU5NTlaMIGAMQswCQYDVQQG
-# EwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29ycG9yYXRpb24xHzAdBgNVBAsTFlN5
-# bWFudGVjIFRydXN0IE5ldHdvcmsxMTAvBgNVBAMTKFN5bWFudGVjIFNIQTI1NiBU
-# aW1lU3RhbXBpbmcgU2lnbmVyIC0gRzMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw
-# ggEKAoIBAQCvDoqq+Ny/aXtUF3FHCb2NPIH4dBV3Z5Cc/d5OAp5LdvblNj5l1SQg
-# bTD53R2D6T8nSjNObRaK5I1AjSKqvqcLG9IHtjy1GiQo+BtyUT3ICYgmCDr5+kMj
-# dUdwDLNfW48IHXJIV2VNrwI8QPf03TI4kz/lLKbzWSPLgN4TTfkQyaoKGGxVYVfR
-# 8QIsxLWr8mwj0p8NDxlsrYViaf1OhcGKUjGrW9jJdFLjV2wiv1V/b8oGqz9KtyJ2
-# ZezsNvKWlYEmLP27mKoBONOvJUCbCVPwKVeFWF7qhUhBIYfl3rTTJrJ7QFNYeY5S
-# MQZNlANFxM48A+y3API6IsW0b+XvsIqbAgMBAAGjggHHMIIBwzAMBgNVHRMBAf8E
-# AjAAMGYGA1UdIARfMF0wWwYLYIZIAYb4RQEHFwMwTDAjBggrBgEFBQcCARYXaHR0
-# cHM6Ly9kLnN5bWNiLmNvbS9jcHMwJQYIKwYBBQUHAgIwGRoXaHR0cHM6Ly9kLnN5
-# bWNiLmNvbS9ycGEwQAYDVR0fBDkwNzA1oDOgMYYvaHR0cDovL3RzLWNybC53cy5z
-# eW1hbnRlYy5jb20vc2hhMjU2LXRzcy1jYS5jcmwwFgYDVR0lAQH/BAwwCgYIKwYB
-# BQUHAwgwDgYDVR0PAQH/BAQDAgeAMHcGCCsGAQUFBwEBBGswaTAqBggrBgEFBQcw
-# AYYeaHR0cDovL3RzLW9jc3Aud3Muc3ltYW50ZWMuY29tMDsGCCsGAQUFBzAChi9o
-# dHRwOi8vdHMtYWlhLndzLnN5bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNlcjAo
-# BgNVHREEITAfpB0wGzEZMBcGA1UEAxMQVGltZVN0YW1wLTIwNDgtNjAdBgNVHQ4E
-# FgQUpRMBqZ+FzBtuFh5fOzGqeTYAex0wHwYDVR0jBBgwFoAUr2PWyqNOhXLgp7xB
-# 8ymiOH+AdWIwDQYJKoZIhvcNAQELBQADggEBAEaer/C4ol+imUjPqCdLIc2yuaZy
-# cGMv41UpezlGTud+ZQZYi7xXipINCNgQujYk+gp7+zvTYr9KlBXmgtuKVG3/KP5n
-# z3E/5jMJ2aJZEPQeSv5lzN7Ua+NSKXUASiulzMub6KlN97QXWZJBw7c/hub2wH9E
-# PEZcF1rjpDvVaSbVIX3hgGd+Yqy3Ti4VmuWcI69bEepxqUH5DXk4qaENz7Sx2j6a
-# escixXTN30cJhsT8kSWyG5bphQjo3ep0YG5gpVZ6DchEWNzm+UgUnuW/3gC9d7GY
-# FHIUJN/HESwfAD/DSxTGZxzMHgajkF9cVIs+4zNbgg/Ft4YCTnGf6WZFP3YxggJa
-# MIICVgIBATCBizB3MQswCQYDVQQGEwJVUzEdMBsGA1UEChMUU3ltYW50ZWMgQ29y
-# cG9yYXRpb24xHzAdBgNVBAsTFlN5bWFudGVjIFRydXN0IE5ldHdvcmsxKDAmBgNV
-# BAMTH1N5bWFudGVjIFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEHvU5a+6zAc/oQEj
-# BCJBTRIwCwYJYIZIAWUDBAIBoIGkMBoGCSqGSIb3DQEJAzENBgsqhkiG9w0BCRAB
-# BDAcBgkqhkiG9w0BCQUxDxcNMjQwMzIyMDA1MzA3WjAvBgkqhkiG9w0BCQQxIgQg
-# PDAJHCE8hGyo8Pujy+7ffHwkb0GghItt3VlMTPo/FcMwNwYLKoZIhvcNAQkQAi8x
-# KDAmMCQwIgQgxHTOdgB9AjlODaXk3nwUxoD54oIBPP72U+9dtx/fYfgwCwYJKoZI
-# hvcNAQEBBIIBAHlpxAsVDQTWXigvN/F+/1CiFOCm4iT7/JUiMKilVBvLyYZHiEjk
-# Bv7sgtIWKoRxiQnOxL8yd8CzL//73OTCcG+GRmzCQf884YxW80hBp8D00Tu/KIMm
-# dNXU34zqB3gJCo/VW/eMznQgR+a0nvC+TnqLxXZ0VhjnJ28Mn9bJPRVeYgWq98er
-# m0Ggi7f9iFj3dbHNXQ2fYgyDtRBH+yTVugo0xsg6cSqRF02BBK7j17cafHEK2u/K
-# ijWmhFiih56w+SqPI2sA5jqdplShnpDEHxcqBoee/F2mp7XyBBhwQTSi+dBN8uOx
-# vUnCUlYWcYt7HGsuaY3835kd3LZDi1iXvO4=
+# AQkEMSIEIFhRq60Do/tGMhSaNGL6H4yUR6m3pUmXM9U5xxWixKTCMA0GCSqGSIb3
+# DQEBAQUABIICABpARRx6kWx0SyTQdSayOAzUXiE8CmjfUmEB0raYYZ2fFCeDQJx5
+# RVdA8Y7kfSHf8cWJ7fP2rrbrhI6YSoGBsC4Bk8EE1WyEylsyNGC34A9cEEmbSC//
+# YkxDph0NlTmrzch1tTnCOoR2H8YFjUX0Q13bqeuv50gNxRy8px6on94k/mWDpTfd
+# 8Q6seRR8KTL7Y1ZoT2ANiu2KiJyjDT3RPYVlprATCsCFG0g+NWeu6mJvYlI4+vXh
+# X3A/yoHtE0azBDydUMq3/PgpTuT43Fv0dwGi9QV///0f20Lbo9pkaOMNO6GlDJ/o
+# 2NZpyQIZwm7FHmUG7XFB5aCIKPbGG8tEX18P4MhTuhuQtBqMdAhUW4JX51fHeSY1
+# O9Rmq4eQFZb81O3BAWqqayiOGBM/V1u9WLlVp8hu1B9LjwjIwOLiSrPf2B5YhMhh
+# ksPUamX930/DwDT2fLRrF34Xu9xf+eB6C+pL8dITrmn3h9EuX/hKmsvtNYsuCC0E
+# Q7/7Sg/smf9cnjcSM8BjoZkytFj14Ggx0KVERzVUkUd/BLb8Bh3l5My2/BB1seGe
+# AWkNTzzCc52RBDBHSi8blU9D1ksqe6TORpDWYx6caJ3R3mxxtVpiK1+DR+DmKzJa
+# Ekb38HtIRaKTMxRWUwqFUwCbmB4wv+xIaI6mX2ZyGobW32emGYtjqKOnoYIOKzCC
+# DicGCisGAQQBgjcDAwExgg4XMIIOEwYJKoZIhvcNAQcCoIIOBDCCDgACAQMxDTAL
+# BglghkgBZQMEAgEwgf4GCyqGSIb3DQEJEAEEoIHuBIHrMIHoAgEBBgtghkgBhvhF
+# AQcXAzAhMAkGBSsOAwIaBQAEFKn0pe/VWCUiGkgf+smb8APEMVkGAhRDfOKg196H
+# w+Z2i4TR8ANYAn34rxgPMjAyNDA1MTYxNzUwNDJaMAMCAR6ggYakgYMwgYAxCzAJ
+# BgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UE
+# CxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazExMC8GA1UEAxMoU3ltYW50ZWMgU0hB
+# MjU2IFRpbWVTdGFtcGluZyBTaWduZXIgLSBHM6CCCoswggU4MIIEIKADAgECAhB7
+# BbHUSWhRRPfJidKcGZ0SMA0GCSqGSIb3DQEBCwUAMIG9MQswCQYDVQQGEwJVUzEX
+# MBUGA1UEChMOVmVyaVNpZ24sIEluYy4xHzAdBgNVBAsTFlZlcmlTaWduIFRydXN0
+# IE5ldHdvcmsxOjA4BgNVBAsTMShjKSAyMDA4IFZlcmlTaWduLCBJbmMuIC0gRm9y
+# IGF1dGhvcml6ZWQgdXNlIG9ubHkxODA2BgNVBAMTL1ZlcmlTaWduIFVuaXZlcnNh
+# bCBSb290IENlcnRpZmljYXRpb24gQXV0aG9yaXR5MB4XDTE2MDExMjAwMDAwMFoX
+# DTMxMDExMTIzNTk1OVowdzELMAkGA1UEBhMCVVMxHTAbBgNVBAoTFFN5bWFudGVj
+# IENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBUcnVzdCBOZXR3b3JrMSgw
+# JgYDVQQDEx9TeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1waW5nIENBMIIBIjANBgkq
+# hkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1mdWVVPnYxyXRqBoutV87ABrTxxrDKP
+# BWuGmicAMpdqTclkFEspu8LZKbku7GOz4c8/C1aQ+GIbfuumB+Lef15tQDjUkQbn
+# QXx5HMvLrRu/2JWR8/DubPitljkuf8EnuHg5xYSl7e2vh47Ojcdt6tKYtTofHjmd
+# w/SaqPSE4cTRfHHGBim0P+SDDSbDewg+TfkKtzNJ/8o71PWym0vhiJka9cDpMxTW
+# 38eA25Hu/rySV3J39M2ozP4J9ZM3vpWIasXc9LFL1M7oCZFftYR5NYp4rBkyjyPB
+# MkEbWQ6pPrHM+dYr77fY5NUdbRE6kvaTyZzjSO67Uw7UNpeGeMWhNwIDAQABo4IB
+# dzCCAXMwDgYDVR0PAQH/BAQDAgEGMBIGA1UdEwEB/wQIMAYBAf8CAQAwZgYDVR0g
+# BF8wXTBbBgtghkgBhvhFAQcXAzBMMCMGCCsGAQUFBwIBFhdodHRwczovL2Quc3lt
+# Y2IuY29tL2NwczAlBggrBgEFBQcCAjAZGhdodHRwczovL2Quc3ltY2IuY29tL3Jw
+# YTAuBggrBgEFBQcBAQQiMCAwHgYIKwYBBQUHMAGGEmh0dHA6Ly9zLnN5bWNkLmNv
+# bTA2BgNVHR8ELzAtMCugKaAnhiVodHRwOi8vcy5zeW1jYi5jb20vdW5pdmVyc2Fs
+# LXJvb3QuY3JsMBMGA1UdJQQMMAoGCCsGAQUFBwMIMCgGA1UdEQQhMB+kHTAbMRkw
+# FwYDVQQDExBUaW1lU3RhbXAtMjA0OC0zMB0GA1UdDgQWBBSvY9bKo06FcuCnvEHz
+# KaI4f4B1YjAfBgNVHSMEGDAWgBS2d/ppSEefUxLVwuoHMnYH0ZcHGTANBgkqhkiG
+# 9w0BAQsFAAOCAQEAdeqwLdU0GVwyRf4O4dRPpnjBb9fq3dxP86HIgYj3p48V5kAp
+# reZd9KLZVmSEcTAq3R5hF2YgVgaYGY1dcfL4l7wJ/RyRR8ni6I0D+8yQL9YKbE4z
+# 7Na0k8hMkGNIOUAhxN3WbomYPLWYl+ipBrcJyY9TV0GQL+EeTU7cyhB4bEJu8LbF
+# +GFcUvVO9muN90p6vvPN/QPX2fYDqA/jU/cKdezGdS6qZoUEmbf4Blfhxg726K/a
+# 7JsYH6q54zoAv86KlMsB257HOLsPUqvR45QDYApNoP4nbRQy/D+XQOG/mYnb5DkU
+# vdrk08PqK1qzlVhVBH3HmuwjA42FKtL/rqlhgTCCBUswggQzoAMCAQICEHvU5a+6
+# zAc/oQEjBCJBTRIwDQYJKoZIhvcNAQELBQAwdzELMAkGA1UEBhMCVVMxHTAbBgNV
+# BAoTFFN5bWFudGVjIENvcnBvcmF0aW9uMR8wHQYDVQQLExZTeW1hbnRlYyBUcnVz
+# dCBOZXR3b3JrMSgwJgYDVQQDEx9TeW1hbnRlYyBTSEEyNTYgVGltZVN0YW1waW5n
+# IENBMB4XDTE3MTIyMzAwMDAwMFoXDTI5MDMyMjIzNTk1OVowgYAxCzAJBgNVBAYT
+# AlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jwb3JhdGlvbjEfMB0GA1UECxMWU3lt
+# YW50ZWMgVHJ1c3QgTmV0d29yazExMC8GA1UEAxMoU3ltYW50ZWMgU0hBMjU2IFRp
+# bWVTdGFtcGluZyBTaWduZXIgLSBHMzCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC
+# AQoCggEBAK8Oiqr43L9pe1QXcUcJvY08gfh0FXdnkJz93k4Cnkt29uU2PmXVJCBt
+# MPndHYPpPydKM05tForkjUCNIqq+pwsb0ge2PLUaJCj4G3JRPcgJiCYIOvn6QyN1
+# R3AMs19bjwgdckhXZU2vAjxA9/TdMjiTP+UspvNZI8uA3hNN+RDJqgoYbFVhV9Hx
+# AizEtavybCPSnw0PGWythWJp/U6FwYpSMatb2Ml0UuNXbCK/VX9vygarP0q3InZl
+# 7Ow28paVgSYs/buYqgE4068lQJsJU/ApV4VYXuqFSEEhh+XetNMmsntAU1h5jlIx
+# Bk2UA0XEzjwD7LcA8joixbRv5e+wipsCAwEAAaOCAccwggHDMAwGA1UdEwEB/wQC
+# MAAwZgYDVR0gBF8wXTBbBgtghkgBhvhFAQcXAzBMMCMGCCsGAQUFBwIBFhdodHRw
+# czovL2Quc3ltY2IuY29tL2NwczAlBggrBgEFBQcCAjAZGhdodHRwczovL2Quc3lt
+# Y2IuY29tL3JwYTBABgNVHR8EOTA3MDWgM6Axhi9odHRwOi8vdHMtY3JsLndzLnN5
+# bWFudGVjLmNvbS9zaGEyNTYtdHNzLWNhLmNybDAWBgNVHSUBAf8EDDAKBggrBgEF
+# BQcDCDAOBgNVHQ8BAf8EBAMCB4AwdwYIKwYBBQUHAQEEazBpMCoGCCsGAQUFBzAB
+# hh5odHRwOi8vdHMtb2NzcC53cy5zeW1hbnRlYy5jb20wOwYIKwYBBQUHMAKGL2h0
+# dHA6Ly90cy1haWEud3Muc3ltYW50ZWMuY29tL3NoYTI1Ni10c3MtY2EuY2VyMCgG
+# A1UdEQQhMB+kHTAbMRkwFwYDVQQDExBUaW1lU3RhbXAtMjA0OC02MB0GA1UdDgQW
+# BBSlEwGpn4XMG24WHl87Map5NgB7HTAfBgNVHSMEGDAWgBSvY9bKo06FcuCnvEHz
+# KaI4f4B1YjANBgkqhkiG9w0BAQsFAAOCAQEARp6v8LiiX6KZSM+oJ0shzbK5pnJw
+# Yy/jVSl7OUZO535lBliLvFeKkg0I2BC6NiT6Cnv7O9Niv0qUFeaC24pUbf8o/mfP
+# cT/mMwnZolkQ9B5K/mXM3tRr41IpdQBKK6XMy5voqU33tBdZkkHDtz+G5vbAf0Q8
+# RlwXWuOkO9VpJtUhfeGAZ35irLdOLhWa5Zwjr1sR6nGpQfkNeTipoQ3PtLHaPpp6
+# xyLFdM3fRwmGxPyRJbIblumFCOjd6nRgbmClVnoNyERY3Ob5SBSe5b/eAL13sZgU
+# chQk38cRLB8AP8NLFMZnHMweBqOQX1xUiz7jM1uCD8W3hgJOcZ/pZkU/djGCAlow
+# ggJWAgEBMIGLMHcxCzAJBgNVBAYTAlVTMR0wGwYDVQQKExRTeW1hbnRlYyBDb3Jw
+# b3JhdGlvbjEfMB0GA1UECxMWU3ltYW50ZWMgVHJ1c3QgTmV0d29yazEoMCYGA1UE
+# AxMfU3ltYW50ZWMgU0hBMjU2IFRpbWVTdGFtcGluZyBDQQIQe9Tlr7rMBz+hASME
+# IkFNEjALBglghkgBZQMEAgGggaQwGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEE
+# MBwGCSqGSIb3DQEJBTEPFw0yNDA1MTYxNzUwNDJaMC8GCSqGSIb3DQEJBDEiBCCR
+# uNM64JfIHnHVMzZsKpS+ZxRZYny+Yb6ZWZTpT22v5TA3BgsqhkiG9w0BCRACLzEo
+# MCYwJDAiBCDEdM52AH0COU4NpeTefBTGgPniggE8/vZT7123H99h+DALBgkqhkiG
+# 9w0BAQEEggEAS2aP1PTxsLouANADZoSPZuYVwnnHhYUtYyJLzXj5h4o5s1UCUnP/
+# csVuX18U2Fuw1EqtNh3jllz6HKyvolX5af3TeqhwqXPcCnPlFxHAMb66TlfmJuSv
+# CRG0kAIAgHjvQ7aE4ROvm2u/bdUVB4tUfjY+DBWCUKV1bbUm20DVFAzhAQ+sEs2b
+# cwxNnZHhNBaLag3aX1aepZpPMP7ZODmjlf4tcOQNVlwxKoCaIkbSHY3e5vz+wOdF
+# eiRY2fglmHToEyTiuHLMIfO0rs1+ADlC6NW0HFRxn+U1RdyPTstCYkimxRmsnQFH
+# ejpocEeDIb52iiiPIa4pFRnJ7umclGwVxg==
 # SIG # End signature block
