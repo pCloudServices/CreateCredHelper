@@ -32,9 +32,7 @@ param(
 $Host.UI.RawUI.WindowTitle = "Privilege Cloud CreateCredFile-Helper"
 $Script:LOG_FILE_PATH = "$PSScriptRoot\_CreateCredFile-Helper.log"
 $global:CPMnewSyncToolFolder = "$PSScriptRoot\CreateCredFile-HelperDependencies"
-
-# Script Version
-$ScriptVersion = "5.0"
+$ScriptVersion = "5.1"
 
 #region Writer Functions
 $InDebug = $PSBoundParameters.Debug.IsPresent
@@ -232,32 +230,11 @@ Function Collect-ExceptionMessage {
 
 
 #region Check latest version
-# Taken from https://github.com/AssafMiron/CheckLatestVersion
-
 $Script:GitHubAPIURL = "https://api.github.com/repos"
 
-# @FUNCTION@ ======================================================================================================================
-# Name...........: Test-ScriptLatestVersion
-# Description....: Compare the current version and the online (GitHub) version
-# Parameters.....: The online file URL, current Version, a pattern to look for the script version number in the online file
-# Return Values..: True if the online version is the latest, False otherwise
-# =================================================================================================================================
 Function Test-ScriptLatestVersion
 {
-<# 
-.SYNOPSIS 
-	Compare the current version and the online (GitHub) version
-.DESCRIPTION
-	Compare the current version and the online (GitHub) version.
-    Can compare version number based on Major, Major-Minor and Major-Minor-Patch version numbers
-    Returns True if the online version is the latest, False otherwise
-.PARAMETER fileURL
-    The online file URL (in GitHub) to download and inspect
-.PARAMETER currentVersion
-    The current version number to compare to
-.PARAMETER versionPattern
-    A pattern of the script version number to search for in the online file
-#>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)]
         [string]$fileURL,
@@ -268,40 +245,36 @@ Function Test-ScriptLatestVersion
         [Parameter(Mandatory=$false)]
         [ref]$outGitHubVersion
     )
-    $getScriptContent = ""
     $isLatestVersion = $false
     try{
-        $getScriptContent = (Invoke-WebRequest -UseBasicParsing -Uri $scriptURL).Content
-        If($($getScriptContent -match "$versionPattern\s{0,1}=\s{0,1}\""([\d\.]{1,10})\"""))
-	    {
+        $getScriptContent = (Invoke-WebRequest -UseBasicParsing -Uri $fileURL).Content
+        if($getScriptContent -match "$versionPattern\s{0,1}=\s{0,1}`"([\d\.]{1,10})`"")
+        {
             $gitHubScriptVersion = $Matches[1]
             if($null -ne $outGitHubVersion)
             {
                 $outGitHubVersion.Value = $gitHubScriptVersion
             }
-            Write-LogMessage -type verbose -msg "Current Version: $currentVersion; GitHub Version: $gitHubScriptVersion"
-            # Get a Major-Minor number format
+            Write-LogMessage -type Verbose -msg "Current Version: $currentVersion; GitHub Version: $gitHubScriptVersion"
             $gitHubMajorMinor = [double]($gitHubScriptVersion.Split(".")[0..1] -join '.')
             $currentMajorMinor = [double]($currentVersion.Split(".")[0..1] -join '.')
-            # Check if we have a Major-Minor-Patch version number or only Major-Minor
-            If(($gitHubScriptVersion.Split(".").count -gt 2) -or ($currentVersion.Split(".").count -gt 2))
+            $gitHubPatch = 0
+            $currentPatch = 0
+            if(($gitHubScriptVersion.Split(".").Count -gt 2) -or ($currentVersion.Split(".").Count -gt 2))
             {
                 $gitHubPatch = [int]($gitHubScriptVersion.Split(".")[2])
                 $currentPatch = [int]($currentVersion.Split(".")[2])
             }
-            # Check the Major-Minor version
-            If($gitHubMajorMinor -ge $currentMajorMinor)
+            if($gitHubMajorMinor -gt $currentMajorMinor)
             {
-                If($gitHubMajorMinor -eq $currentMajorMinor)
-                {
-                    # Check the patch version
-                    $isLatestVersion = $($gitHubPatch -gt $currentPatch)
-                }
-                else {
-                    $isLatestVersion = $true
-                }
+                $isLatestVersion = $true
+            }
+            elseif($gitHubMajorMinor -eq $currentMajorMinor -and $gitHubPatch -gt $currentPatch)
+            {
+                $isLatestVersion = $true
             }
         }
+        else
         {
             Write-LogMessage -type Info -MSG "Test-ScriptLatestVersion: Couldn't match Script Version pattern ($versionPattern)"
         }
@@ -313,26 +286,8 @@ Function Test-ScriptLatestVersion
     return $isLatestVersion
 }
 
-# @FUNCTION@ ======================================================================================================================
-# Name...........: Copy-GitHubContent
-# Description....: Copies all file and folder structure from a specified GitHub repository folder
-# Parameters.....: The output folder path, the GitHub item URL to download from
-# Return Values..: NONE
-# =================================================================================================================================
 Function Copy-GitHubContent
 {
-    <# 
-.SYNOPSIS 
-	Copies all file and folder structure from a specified GitHub repository folder
-.DESCRIPTION
-	Copies all file and folder structure from a specified GitHub repository folder
-    Will create the content from a GitHub URL in the output folder
-    Can handle files and folders recursively
-.PARAMETER outputFolderPath
-    The folder path to create the files and folders in
-.PARAMETER gitHubItemURL
-    The GitHub item URL to download from
-#>
     [CmdletBinding()]
     param (
         [Parameter(Mandatory=$true)]
@@ -346,13 +301,11 @@ Function Copy-GitHubContent
         foreach ($item in $gitHubFolderObject) {
             if($item.type -eq "dir")
             {
-                # Create the relevant folder
                 $itemDir = Join-Path -Path $outputFolderPath -ChildPath $item.name
                 if(! (Test-Path -path $itemDir))
                 {
                     New-Item -ItemType Directory -Path $itemDir | Out-Null
-                }		
-                # Get all relevant files from the folder
+                }
                 Copy-GitHubContent -outputFolderPath $itemDir -gitHubItemURL $item.url
             }
             elseif ($item.type -eq "file") {
@@ -382,83 +335,47 @@ Function Replace-Item
     try{
         foreach($item in $(Get-ChildItem -Recurse:$Recurse -Path $Path))
         {
-            $destPath = split-path -path $item.fullName.Replace($Path, $Destination) -Parent
-            $oldName = "$($item.name).OLD"
-            if(Test-Path -Path $(Join-Path -path $destPath -ChildPath $item.name))
+            $destPath = Split-Path -Path $item.FullName.Replace($Path, $Destination) -Parent
+            $oldName = "$($item.Name).OLD"
+            if(Test-Path -Path $(Join-Path -Path $destPath -ChildPath $item.Name))
             {
-                Rename-Item -Path $(Join-Path -path $destPath -ChildPath $item.name) -NewName $oldName
-                Copy-Item -path $item.FullName -Destination $(Join-Path -path $destPath -ChildPath $item.name)
-                Remove-Item -path $(Join-Path -path $destPath -ChildPath $oldName)
+                Rename-Item -Path $(Join-Path -Path $destPath -ChildPath $item.Name) -NewName $oldName
+                Copy-Item -Path $item.FullName -Destination $(Join-Path -Path $destPath -ChildPath $item.Name)
+                Remove-Item -Path $(Join-Path -Path $destPath -ChildPath $oldName)
             }
-            Else
-			{
-				Write-Error "Can't find file $($item.name) in destination location '$destPath' to replace, copying"
-                Copy-Item -path $item.FullName -Destination $destPath
-			}
+            else
+            {
+                Write-Error "Can't find file $($item.Name) in destination location '$destPath' to replace, copying"
+                Copy-Item -Path $item.FullName -Destination $destPath
+            }
         }
     }
     catch{
         Throw $(New-Object System.Exception ("Replace-Item: Couldn't Replace files",$_.Exception))
     }
-
 }
 
-# @FUNCTION@ ======================================================================================================================
-# Name...........: Test-GitHubLatestVersion
-# Description....: Tests if the script is running the latest version from GitHub
-# Parameters.....: NONE
-# Return Values..: True / False
-# =================================================================================================================================
 Function Test-GitHubLatestVersion
 {
-<# 
-.SYNOPSIS 
-	Tests if the script is running the latest version from GitHub
-.DESCRIPTION
-	Tests if the script is running the latest version from GitHub
-    Can support a mode of test only and Test and download new version
-    Can support searching the entire repository or a specific folder or a specific branch (default main)
-    If not exclusively selected to test only, the function will update the script if a new version is found
-.PARAMETER repositoryName
-    The repository name
-.PARAMETER scriptVersionFileName
-    The file name to search the script version in
-.PARAMETER currentVersion
-    The current version of the script
-.PARAMETER sourceFolderPath
-    The source folder of the script
-    Used to download and replace the new updated script to
-.PARAMETER repositoryFolderPath
-    The repository Folder path
-.PARAMETER branch
-    The branch to search for
-    Default main
-.PARAMETER versionPattern
-    The pattern to check in the script
-    Default: ScriptVersion
-.PARAMETER TestOnly
-    Switch parameter to perform only test
-    If not exclusively selected, the function will update the script if a new version is found
-#>
-[CmdletBinding()]
-param (
-    [Parameter(Mandatory=$true)]
-    [string]$repositoryName,
-    [Parameter(Mandatory=$true)]
-    [string]$scriptVersionFileName,
-    [Parameter(Mandatory=$true)]
-    [string]$currentVersion,
-    [Parameter(Mandatory=$true)]
-    [string]$sourceFolderPath,
-    [Parameter(Mandatory=$false)]
-    [string]$repositoryFolderPath,
-    [Parameter(Mandatory=$false)]
-    [string]$branch = "main",
-    [Parameter(Mandatory=$false)]
-    [string]$versionPattern = "ScriptVersion",
-    [Parameter(Mandatory=$false)]
-    [switch]$TestOnly
-)
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$repositoryName,
+        [Parameter(Mandatory=$true)]
+        [string]$scriptVersionFileName,
+        [Parameter(Mandatory=$true)]
+        [string]$currentVersion,
+        [Parameter(Mandatory=$true)]
+        [string]$sourceFolderPath,
+        [Parameter(Mandatory=$false)]
+        [string]$repositoryFolderPath,
+        [Parameter(Mandatory=$false)]
+        [string]$branch = "main",
+        [Parameter(Mandatory=$false)]
+        [string]$versionPattern = "ScriptVersion",
+        [Parameter(Mandatory=$false)]
+        [switch]$TestOnly
+    )
     if([string]::IsNullOrEmpty($repositoryFolderPath))
     {
         $apiURL = "$GitHubAPIURL/$repositoryName/contents"
@@ -466,64 +383,58 @@ param (
     else {
         $apiURL = "$GitHubAPIURL/$repositoryName/contents/$repositoryFolderPath`?ref=$branch"
     }
-	
-	$retLatestVersion = $true
-	try{
-		$folderContents = $(Invoke-RestMethod -Method Get -Uri $apiURL)
-		$scriptURL = $($folderContents | Where-Object { $_.Type -eq "file" -and $_.Name -eq $scriptVersionFileName }).download_url
+
+    $retLatestVersion = $true
+    try{
+        $folderContents = $(Invoke-RestMethod -Method Get -Uri $apiURL)
+        $scriptURL = $($folderContents | Where-Object { $_.Type -eq "file" -and $_.Name -eq $scriptVersionFileName }).download_url
         $gitHubVersion = 0
         $shouldDownloadLatestVersion = Test-ScriptLatestVersion -fileURL $scriptURL -currentVersion $currentVersion -outGitHubVersion ([ref]$gitHubVersion)
-	}
-	catch
-	{
-		Write-LogMessage -type Info -MSG ("Test-GitHubLatestVersion: Couldn't check for latest version $($_.Exception.Message)")
-	}
-	
+    }
+    catch
+    {
+        Write-LogMessage -type Info -MSG ("Test-GitHubLatestVersion: Couldn't check for latest version $($_.Exception.Message)")
+        return $true
+    }
+
     try{
-        # Check if we need to download the gitHub version
-        If($shouldDownloadLatestVersion -eq $true)
+        if($shouldDownloadLatestVersion -eq $true)
         {
-            # GitHub has a more updated version
             $retLatestVersion = $false
-            If(! $TestOnly) # Not Test only, update script
+            if(! $TestOnly)
             {
                 Write-LogMessage -type Info -Msg "Found new version (version $gitHubVersion), Updating..."
-                # Create a new tmp folder to download all files to
-                $tmpFolder = Join-Path -path $sourceFolderPath -ChildPath "tmp"
-                if(! (Test-Path -path $tmpFolder))
+                $tmpFolder = Join-Path -Path $sourceFolderPath -ChildPath "tmp"
+                if(! (Test-Path -Path $tmpFolder))
                 {
                     New-Item -ItemType Directory -Path $tmpFolder | Out-Null
                 }
                 try{
-                    # Download the entire folder (files and directories) to the tmp folder
                     Copy-GitHubContent -outputFolderPath $tmpFolder -gitHubItemURL $apiURL
-                    # Replace the current folder content
                     Replace-Item -Recurse -Path $tmpFolder -Destination $sourceFolderPath
-                    # Remove tmp folder
                     Remove-Item -Recurse -Path $tmpFolder -Force
                 }
                 catch
                 {
-                    # Revert to current version in case of error
                     $retLatestVersion = $true
                     Write-Error -Message "There was an error downloading GitHub content." -Exception $_.Exception
                 }
             }
             else {
-                Write-LogMessage -type Info -Msg "Found a new version in GitHub (version $gitHubVersion), skipping update"    
+                Write-LogMessage -type Info -Msg "Found a new version in GitHub (version $gitHubVersion), skipping update"
             }
         }
-        Else
+        else
         {
             Write-LogMessage -type Info -Msg "Current version ($currentVersion) is the latest!"
         }
     }
     catch
-	{
-		Throw $(New-Object System.Exception ("Test-GitHubLatestVersion: Couldn't download latest version",$_.Exception))
-	}
-	
-	return $retLatestVersion
+    {
+        Throw $(New-Object System.Exception ("Test-GitHubLatestVersion: Couldn't download latest version",$_.Exception))
+    }
+
+    return $retLatestVersion
 }
 
 # @FUNCTION@ ======================================================================================================================
@@ -670,7 +581,7 @@ function Get-ServiceInstallPath {
                 return $imagePath
             }
         } else {
-            # If the path isn’t quoted, assume the executable path is the first token.
+            # If the path isnï¿½t quoted, assume the executable path is the first token.
             return $imagePath.Split(" ")[0]
         }
     }
@@ -1825,6 +1736,10 @@ Function Invoke-GenerateCredFile
         #Generate a new password with Complexity and we use it later for the Vault part
         $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($NewPassword) #Convert Password to BSTR
         $GetComponentUserDetailsNewPW = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR) #Convert Password to Plaintext
+        $ComponentUser = $ComponentUser.Trim()
+        if ([string]::IsNullOrWhiteSpace($ComponentUser)) {
+            throw "Component user is empty. Cannot generate CredFile '$FileName'."
+        }
         Write-LogMessage -type Info -MSG "Generating CredFile: '$FileName'"
         #Generate Cred, Check if component is version 12 or lower and select the relevant cred file command
         If($ComponentVersion -gt 12)
@@ -1848,6 +1763,13 @@ Function Invoke-GenerateCredFile
             If($ComponentID -eq "PSM") { $appType = "PSMApp" }
             If ($ComponentID -eq "AIM") { $appType = "AIMProvider" }
             & "$ComponentPath\Vault\CreateCredFile.exe" "$FileName" Password /username $ComponentUser /Password $GetComponentUserDetailsNewPW /AppType $appType
+        }
+        if (-not (Test-Path -LiteralPath $FileName)) {
+            throw "CreateCredFile.exe did not create file '$FileName'."
+        }
+        $credFileInfo = Get-Item -LiteralPath $FileName
+        if ($credFileInfo.Length -eq 0) {
+            throw "CreateCredFile.exe created an empty file '$FileName'."
         }
     } catch {
         Throw $(New-Object System.Exception ("Error generating CredFile for file '$FileName'.",$_.Exception))
@@ -1890,16 +1812,16 @@ param(
     }
     Set-Content -Path $InputFile -Value $jsonContent
     
-    Write-LogMessage -type Info -MSG "Input JSON file created/updated at $InputFile"
-    
-
     function RunProcess {
         param (
             [Parameter(Mandatory=$true)]
             [string]$ProcessFullPath,
     
             [Parameter(Mandatory=$false)]
-            [string[]]$Args
+            [string[]]$Args,
+
+            [Parameter(Mandatory=$false)]
+            [string]$ComponentUser
     
         )
         begin {
@@ -1911,15 +1833,30 @@ param(
             foreach ($item in $Args) {
                 $processArgs += "`"$item`" "
             }
-    
-            [System.Environment]::SetEnvironmentVariable("VAULT_PASSWORD", $Credentials.GetNetworkCredential().Password)
-    
-    
-            $process = (Start-Process $ProcessName "$processArgs" -WorkingDirectory $processPath -Wait -WindowStyle Hidden -PassThru)
+
+            if ([string]::IsNullOrWhiteSpace($ComponentUser)) {
+                Write-LogMessage -type Info -MSG "Running $processName..."
+            }
+            else {
+                Write-LogMessage -type Info -MSG "Running $processName for user '$ComponentUser'..."
+            }
+
+            [System.Environment]::SetEnvironmentVariable('VAULT_PASSWORD', $Credentials.GetNetworkCredential().Password)
+
+            try {
+                $process = (Start-Process -FilePath $ProcessFullPath -ArgumentList $processArgs -WorkingDirectory $processPath -Wait -WindowStyle Hidden -PassThru)
+            }
+            finally {
+                [System.Environment]::SetEnvironmentVariable('VAULT_PASSWORD', $null)
+            }
+
             $processExitCode = $process.ExitCode.ToString()
             [bool]$isSuccess = $false
             if ($process.ExitCode -eq 0) {
                 Write-LogMessage -type Success -MSG "Process $processName finished successfully"
+                if (-not [string]::IsNullOrWhiteSpace($ComponentUser)) {
+                    Write-LogMessage -type Success -MSG "Successfully synced CPM user '$ComponentUser'."
+                }
             }
             else {
                 Write-LogMessage -type Error -MSG "Process $processName failed with exit code $processExitCode"
@@ -1934,7 +1871,7 @@ param(
         $args = @($InputFile, "yes")
         $ExecutableFullPath = Resolve-Path $CPMnewSyncToolFolder\SyncCompUsers.exe
     
-        RunProcess -ProcessFullPath $ExecutableFullPath -Args $args
+        RunProcess -ProcessFullPath $ExecutableFullPath -Args $args -ComponentUser $apiUser
     }
     catch {
         Write-LogMessage -type Error -MSG "Failed to sync component users."
@@ -1984,7 +1921,7 @@ Function Invoke-ResetCredFile
                 {
                     $foundUser = $(Find-UserInSystemLogs -User $User.ComponentUserName -LogPaths $Component.ServiceLogs)
                     If(! [string]::IsNullOrEmpty($foundUser)){
-                        Write-LogMessage -Type Info -MSG "Found a match between an offline component user '$foundUser' and local logs, will use it to generate CredFile."
+                        Write-LogMessage -Type Success -MSG "Found a match between an offline component user '$foundUser' and local logs, will use it to generate CredFile."
                         $ComponentUser = $foundUser
                         #If the $CredFile is psmgw.cred then we split the SystemHealth PSM App user into 2 strings and replace "PSMApp_blabla" with "PSMgw_blabla" so we also reset the gw cred.
                             If ($credFile -like "*psmgw.cred*"){
@@ -1996,8 +1933,13 @@ Function Invoke-ResetCredFile
                 If($offlineComponents.Count -eq 0 -or $ComponentUser -eq $null)
                 {
                     # We couldn't find any component User - ask the user to input the user name
-                    Write-LogMessage -Type Info -MSG "Couldn't match offline component user in SystemHealth in local Logs, will have to input manually."
-                    $ComponentUser = $(Read-Host "Enter the relevant user name for CredFile: '$credFile'")
+                    Write-LogMessage -Type Warning -MSG "Couldn't match offline component user in SystemHealth in local Logs, will have to input manually."
+                    do {
+                        $ComponentUser = (Read-Host "Enter the relevant user name for CredFile: '$credFile'").Trim()
+                        if ([string]::IsNullOrWhiteSpace($ComponentUser)) {
+                            Write-LogMessage -Type Warning -MSG "No user name was entered. Please enter a valid component user name."
+                        }
+                    } while ([string]::IsNullOrWhiteSpace($ComponentUser))
                 }
             }
             Invoke-GenerateCredFile @generateCredFileParameters -FileName $credFile -ComponentUser $ComponentUser
@@ -2025,6 +1967,48 @@ Function Invoke-ResetCredFile
     } catch {
         Throw $(New-Object System.Exception ("Error in the flow of Resetting component $($Component.Name) credentials file.",$_.Exception))
     }
+}
+
+Function Resolve-ComponentUserForCredFile
+{
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$true)]
+        [PSObject]$Component,
+        [Parameter(Mandatory=$true)]
+        [string]$CredFile
+    )
+
+    $ComponentUser = $(Get-CredFileUser -File $CredFile)
+    if([string]::IsNullOrEmpty($ComponentUser))
+    {
+        Write-LogMessage -Type Info -MSG "Could not find Component User from CredFile, trying to look for all offline components"
+        $offlineComponents = $(Get-SystemHealth -ComponentID $Component.Name -OfflineOnly)
+        Foreach($user in $offlineComponents)
+        {
+            $foundUser = $(Find-UserInSystemLogs -User $User.ComponentUserName -LogPaths $Component.ServiceLogs)
+            If(! [string]::IsNullOrEmpty($foundUser)){
+                Write-LogMessage -Type Success -MSG "Found a match between an offline component user '$foundUser' and local logs, will use it to generate CredFile."
+                $ComponentUser = $foundUser
+                if ($CredFile -like "*psmgw.cred*"){
+                    $ComponentUser = "PSMGw_"+$foundUser.split("_")[1]
+                }
+                Break
+            }
+        }
+        If($offlineComponents.Count -eq 0 -or [string]::IsNullOrWhiteSpace($ComponentUser))
+        {
+            Write-LogMessage -Type Warning -MSG "Couldn't match offline component user in SystemHealth in local Logs, will have to input manually."
+            do {
+                $ComponentUser = (Read-Host "Enter the relevant user name for CredFile: '$CredFile'").Trim()
+                if ([string]::IsNullOrWhiteSpace($ComponentUser)) {
+                    Write-LogMessage -Type Warning -MSG "No user name was entered. Please enter a valid component user name."
+                }
+            } while ([string]::IsNullOrWhiteSpace($ComponentUser))
+        }
+    }
+
+    return $ComponentUser
 }
 
 Function Get-UserAndResetPassword{
@@ -2341,17 +2325,11 @@ $simplePw = $null
 # -----------------------------------
 # Script Begins Here
 Write-LogMessage -type Info -MSG "Starting Create CredFile helper script" -Header
-# Check latest version
 $gitHubLatestVersionParameters = @{
     currentVersion = $ScriptVersion;
     repositoryName = "pCloudServices/CreateCredHelper";
     scriptVersionFileName = "CreateCredFile-Helper.ps1";
     sourceFolderPath = $PSScriptRoot;
-    
-    # More parameters that can be used
-    # repositoryFolderPath = "FolderName";
-    # branch = "main";
-    # versionPattern = "ScriptVersion";
 }
 
 If(! $SkipVersionCheck)
@@ -2361,16 +2339,13 @@ If(! $SkipVersionCheck)
         $isLatestVersion = $(Test-GitHubLatestVersion @gitHubLatestVersionParameters)
 		If($isLatestVersion -eq $false)
 		{
-            # Skip the version check so we don't get into a loop
 			$scriptPathAndArgs = "`& `"$PSScriptRoot\CreateCredFile-Helper.ps1`" -SkipVersionCheck"
 			Write-LogMessage -type Info -Msg "Finished Updating, relaunching the script"
-			# Run the updated script
 			Invoke-Expression $scriptPathAndArgs
-			# Exit the current script
 			return
 		}
 	} catch {
-		Write-LogMessage -type Error -Msg "Error checking for latest version. Error: $(Join-ExceptionMessage $_.Exception)"  
+		Write-LogMessage -type Error -Msg "Error checking for latest version. Error: $(Join-ExceptionMessage $_.Exception)"
 	}
 }
 
@@ -2400,17 +2375,48 @@ try{
             Write-Host "Exiting..." -ForegroundColor Gray
             break
         }
-                Else
+        Else
         {
             $answer = [int]$answer #if answer is not a letter (Q) convert to int so we can use the below command
             $typeChosen = $detectedComponents[$answer-1]
-            Invoke-ResetCredFile -Component $typeChosen
+            if ($typeChosen.Name -eq "CPM" -and $typeChosen.Version -ge [version]"14.2")
+            {
+                $typeChosen.InitPVWAURL()
+                Invoke-Logon
+                Foreach($svc in $typeChosen.ServiceName)
+                {
+                    Stop-CYBRService -ServiceName $svc
+                }
+                $resolvedComponentUser = Resolve-ComponentUserForCredFile -Component $typeChosen -CredFile $typeChosen.ComponentUser[0]
+                $global:apiKeyUsername = $resolvedComponentUser
+                $global:apiKeyPath = $typeChosen.Path
+                Write-LogMessage -Type Info -MSG "CPM version $($typeChosen.Version) detected, using SyncCompUsers.exe to update CPM credentials instead of the legacy CreateCredFile.exe flow."
+            }
+            else
+            {
+                Invoke-ResetCredFile -Component $typeChosen
+            }
             switch ($typeChosen.Name)
             {
                 "CPM"
                 {
                     $PluginManagerUser = "PluginManagerUser"
                     $cpmPath = $typeChosen.Path
+                    if($typeChosen.Version -ge [version]"14.2"){
+                        if(Test-Path $CPMnewSyncToolFolder){
+                            ResetCPMUserandAPIkeyNewMethdod -cpmPath $cpmPath -credential $Credentials -apiUser $apiKeyUsername
+                            Foreach($svc in $typeChosen.ServiceName)
+                            {
+                                if (-not($svc -eq "CyberArk Central Policy Manager Scanner")){
+                                    Start-CYBRService -ServiceName $svc
+                                }
+                            }
+                        }Else{
+                            Throw "Couldn't find folder '$CPMnewSyncToolFolder'. Make sure you downloaded the latest tool package."
+                        }
+                        Try{Invoke-Logoff}Catch{}
+                        Invoke-Logon
+                    }
                     Write-LogMessage -type Info -MSG "Syncing $PluginManagerUser"
                     if ($typeChosen.Version -ge [version]"13.1")
                     {   
@@ -2497,13 +2503,7 @@ try{
                             } else {
                                 # in 14.2 CPM deprecated apikeymanger tool and we need to use the new tool
                                 if($typeChosen.Version -ge [version]"14.2"){
-                                    #check app exists
-                                    if(Test-Path $CPMnewSyncToolFolder){
-                                        ResetCPMUserandAPIkeyNewMethdod -cpmPath $cpmPath -credential $Credentials -apiUser $apiKeyUsername
-                                    }Else{
-                                        Write-LogMessage -type Error -MSG "Couldn't find folder $syncCompAPpPath make sure you download the latest zip from marketplace."
-                                        Write-LogMessage -type Error -MSG "Skipping API Key reset..."
-                                    }
+                                    Write-LogMessage -type Info -MSG "CPM component credentials were already updated using SyncCompUsers.exe earlier in the flow."
                                 }
                                 Else
                                 {
@@ -2547,279 +2547,226 @@ Finally{
 # Script ended
 Write-LogMessage -type Info -MSG "Create CredFile helper script ended" -Footer
 return
-###########
+
 # SIG # Begin signature block
-# MIIzFwYJKoZIhvcNAQcCoIIzCDCCMwQCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIIpLQYJKoZIhvcNAQcCoIIpHjCCKRoCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAhCrR8mQWP/fgr
-# jfUUFb6RMKTbNgcXj9pOg4RYkt+ODaCCGJkwggROMIIDNqADAgECAg0B7l8Wnf+X
-# NStkZdZqMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBH
-# bG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9i
-# YWxTaWduIFJvb3QgQ0EwHhcNMTgwOTE5MDAwMDAwWhcNMjgwMTI4MTIwMDAwWjBM
-# MSAwHgYDVQQLExdHbG9iYWxTaWduIFJvb3QgQ0EgLSBSMzETMBEGA1UEChMKR2xv
-# YmFsU2lnbjETMBEGA1UEAxMKR2xvYmFsU2lnbjCCASIwDQYJKoZIhvcNAQEBBQAD
-# ggEPADCCAQoCggEBAMwldpB5BngiFvXAg7aEyiie/QV2EcWtiHL8RgJDx7KKnQRf
-# JMsuS+FggkbhUqsMgUdwbN1k0ev1LKMPgj0MK66X17YUhhB5uzsTgHeMCOFJ0mpi
-# Lx9e+pZo34knlTifBtc+ycsmWQ1z3rDI6SYOgxXG71uL0gRgykmmKPZpO/bLyCiR
-# 5Z2KYVc3rHQU3HTgOu5yLy6c+9C7v/U9AOEGM+iCK65TpjoWc4zdQQ4gOsC0p6Hp
-# sk+QLjJg6VfLuQSSaGjlOCZgdbKfd/+RFO+uIEn8rUAVSNECMWEZXriX7613t2Sa
-# er9fwRPvm2L7DWzgVGkWqQPabumDk3F2xmmFghcCAwEAAaOCASIwggEeMA4GA1Ud
-# DwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBSP8Et/qC5FJK5N
-# UPpjmove4t0bvDAfBgNVHSMEGDAWgBRge2YaRQ2XyolQL30EzTSo//z9SzA9Bggr
-# BgEFBQcBAQQxMC8wLQYIKwYBBQUHMAGGIWh0dHA6Ly9vY3NwLmdsb2JhbHNpZ24u
-# Y29tL3Jvb3RyMTAzBgNVHR8ELDAqMCigJqAkhiJodHRwOi8vY3JsLmdsb2JhbHNp
-# Z24uY29tL3Jvb3QuY3JsMEcGA1UdIARAMD4wPAYEVR0gADA0MDIGCCsGAQUFBwIB
-# FiZodHRwczovL3d3dy5nbG9iYWxzaWduLmNvbS9yZXBvc2l0b3J5LzANBgkqhkiG
-# 9w0BAQsFAAOCAQEAI3Dpz+K+9VmulEJvxEMzqs0/OrlkF/JiBktI8UCIBheh/qvR
-# XzzGM/Lzjt0fHT7MGmCZggusx/x+mocqpX0PplfurDtqhdbevUBj+K2myIiwEvz2
-# Qd8PCZceOOpTn74F9D7q059QEna+CYvCC0h9Hi5R9o1T06sfQBuKju19+095VnBf
-# DNOOG7OncA03K5eVq9rgEmscQM7Fx37twmJY7HftcyLCivWGQ4it6hNu/dj+Qi+5
-# fV6tGO+UkMo9J6smlJl1x8vTe/fKTNOvUSGSW4R9K58VP3TLUeiegw4WbxvnRs4j
-# vfnkoovSOWuqeRyRLOJhJC2OKkhwkMQexejgcDCCBaIwggSKoAMCAQICEHgDGEJF
-# cIpBz28BuO60qVQwDQYJKoZIhvcNAQEMBQAwTDEgMB4GA1UECxMXR2xvYmFsU2ln
-# biBSb290IENBIC0gUjMxEzARBgNVBAoTCkdsb2JhbFNpZ24xEzARBgNVBAMTCkds
-# b2JhbFNpZ24wHhcNMjAwNzI4MDAwMDAwWhcNMjkwMzE4MDAwMDAwWjBTMQswCQYD
-# VQQGEwJCRTEZMBcGA1UEChMQR2xvYmFsU2lnbiBudi1zYTEpMCcGA1UEAxMgR2xv
-# YmFsU2lnbiBDb2RlIFNpZ25pbmcgUm9vdCBSNDUwggIiMA0GCSqGSIb3DQEBAQUA
-# A4ICDwAwggIKAoICAQC2LcUw3Xroq5A9A3KwOkuZFmGy5f+lZx03HOV+7JODqoT1
-# o0ObmEWKuGNXXZsAiAQl6fhokkuC2EvJSgPzqH9qj4phJ72hRND99T8iwqNPkY2z
-# BbIogpFd+1mIBQuXBsKY+CynMyTuUDpBzPCgsHsdTdKoWDiW6d/5G5G7ixAs0sdD
-# HaIJdKGAr3vmMwoMWWuOvPSrWpd7f65V+4TwgP6ETNfiur3EdaFvvWEQdESymAfi
-# dKv/aNxsJj7pH+XgBIetMNMMjQN8VbgWcFwkeCAl62dniKu6TjSYa3AR3jjK1L6h
-# wJzh3x4CAdg74WdDhLbP/HS3L4Sjv7oJNz1nbLFFXBlhq0GD9awd63cNRkdzzr+9
-# lZXtnSuIEP76WOinV+Gzz6ha6QclmxLEnoByPZPcjJTfO0TmJoD80sMD8IwM0kXW
-# LuePmJ7mBO5Cbmd+QhZxYucE+WDGZKG2nIEhTivGbWiUhsaZdHNnMXqR8tSMeW58
-# prt+Rm9NxYUSK8+aIkQIqIU3zgdhVwYXEiTAxDFzoZg1V0d+EDpF2S2kUZCYqaAH
-# N8RlGqocaxZ396eX7D8ZMJlvMfvqQLLn0sT6ydDwUHZ0WfqNbRcyvvjpfgP054d1
-# mtRKkSyFAxMCK0KA8olqNs/ITKDOnvjLja0Wp9Pe1ZsYp8aSOvGCY/EuDiRk3wID
-# AQABo4IBdzCCAXMwDgYDVR0PAQH/BAQDAgGGMBMGA1UdJQQMMAoGCCsGAQUFBwMD
-# MA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFB8Av0aACvx4ObeltEPZVlC7zpY7
-# MB8GA1UdIwQYMBaAFI/wS3+oLkUkrk1Q+mOai97i3Ru8MHoGCCsGAQUFBwEBBG4w
-# bDAtBggrBgEFBQcwAYYhaHR0cDovL29jc3AuZ2xvYmFsc2lnbi5jb20vcm9vdHIz
-# MDsGCCsGAQUFBzAChi9odHRwOi8vc2VjdXJlLmdsb2JhbHNpZ24uY29tL2NhY2Vy
-# dC9yb290LXIzLmNydDA2BgNVHR8ELzAtMCugKaAnhiVodHRwOi8vY3JsLmdsb2Jh
-# bHNpZ24uY29tL3Jvb3QtcjMuY3JsMEcGA1UdIARAMD4wPAYEVR0gADA0MDIGCCsG
-# AQUFBwIBFiZodHRwczovL3d3dy5nbG9iYWxzaWduLmNvbS9yZXBvc2l0b3J5LzAN
-# BgkqhkiG9w0BAQwFAAOCAQEArPfMFYsweagdCyiIGQnXHH/+hr17WjNuDWcOe2LZ
-# 4RhcsL0TXR0jrjlQdjeqRP1fASNZhlZMzK28ZBMUMKQgqOA/6Jxy3H7z2Awjuqgt
-# qjz27J+HMQdl9TmnUYJ14fIvl/bR4WWWg2T+oR1R+7Ukm/XSd2m8hSxc+lh30a6n
-# sQvi1ne7qbQ0SqlvPfTzDZVd5vl6RbAlFzEu2/cPaOaDH6n35dSdmIzTYUsvwyh+
-# et6TDrR9oAptksS0Zj99p1jurPfswwgBqzj8ChypxZeyiMgJAhn2XJoa8U1sMNSz
-# BqsAYEgNeKvPF62Sk2Igd3VsvcgytNxN69nfwZCWKb3BfzCCBugwggTQoAMCAQIC
-# EHe9DgW3WQu2HUdhUx4/de0wDQYJKoZIhvcNAQELBQAwUzELMAkGA1UEBhMCQkUx
-# GTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExKTAnBgNVBAMTIEdsb2JhbFNpZ24g
-# Q29kZSBTaWduaW5nIFJvb3QgUjQ1MB4XDTIwMDcyODAwMDAwMFoXDTMwMDcyODAw
-# MDAwMFowXDELMAkGA1UEBhMCQkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2Ex
-# MjAwBgNVBAMTKUdsb2JhbFNpZ24gR0NDIFI0NSBFViBDb2RlU2lnbmluZyBDQSAy
-# MDIwMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyyDvlx65ATJDoFup
-# iiP9IF6uOBKLyizU/0HYGlXUGVO3/aMX53o5XMD3zhGj+aXtAfq1upPvr5Pc+OKz
-# GUyDsEpEUAR4hBBqpNaWkI6B+HyrL7WjVzPSWHuUDm0PpZEmKrODT3KxintkktDw
-# tFVflgsR5Zq1LLIRzyUbfVErmB9Jo1/4E541uAMC2qQTL4VK78QvcA7B1MwzEuy9
-# QJXTEcrmzbMFnMhT61LXeExRAZKC3hPzB450uoSAn9KkFQ7or+v3ifbfcfDRvqey
-# QTMgdcyx1e0dBxnE6yZ38qttF5NJqbfmw5CcxrjszMl7ml7FxSSTY29+EIthz5hV
-# oySiiDby+Z++ky6yBp8mwAwBVhLhsoqfDh7cmIsuz9riiTSmHyagqK54beyhiBU8
-# wurut9itYaWvcDaieY7cDXPA8eQsq5TsWAY5NkjWO1roIs50Dq8s8RXa0bSV6KzV
-# SW3lr92ba2MgXY5+O7JD2GI6lOXNtJizNxkkEnJzqwSwCdyF5tQiBO9AKh0ubcdp
-# 0263AWwN4JenFuYmi4j3A0SGX2JnTLWnN6hV3AM2jG7PbTYm8Q6PsD1xwOEyp4Lk
-# tjICMjB8tZPIIf08iOZpY/judcmLwqvvujr96V6/thHxvvA9yjI+bn3eD36blcQS
-# h+cauE7uLMHfoWXoJIPJKsL9uVMCAwEAAaOCAa0wggGpMA4GA1UdDwEB/wQEAwIB
-# hjATBgNVHSUEDDAKBggrBgEFBQcDAzASBgNVHRMBAf8ECDAGAQH/AgEAMB0GA1Ud
-# DgQWBBQlndD8WQmGY8Xs87ETO1ccA5I2ETAfBgNVHSMEGDAWgBQfAL9GgAr8eDm3
-# pbRD2VZQu86WOzCBkwYIKwYBBQUHAQEEgYYwgYMwOQYIKwYBBQUHMAGGLWh0dHA6
-# Ly9vY3NwLmdsb2JhbHNpZ24uY29tL2NvZGVzaWduaW5ncm9vdHI0NTBGBggrBgEF
-# BQcwAoY6aHR0cDovL3NlY3VyZS5nbG9iYWxzaWduLmNvbS9jYWNlcnQvY29kZXNp
-# Z25pbmdyb290cjQ1LmNydDBBBgNVHR8EOjA4MDagNKAyhjBodHRwOi8vY3JsLmds
-# b2JhbHNpZ24uY29tL2NvZGVzaWduaW5ncm9vdHI0NS5jcmwwVQYDVR0gBE4wTDBB
-# BgkrBgEEAaAyAQIwNDAyBggrBgEFBQcCARYmaHR0cHM6Ly93d3cuZ2xvYmFsc2ln
-# bi5jb20vcmVwb3NpdG9yeS8wBwYFZ4EMAQMwDQYJKoZIhvcNAQELBQADggIBACV1
-# oAnJObq3oTmJLxifq9brHUvolHwNB2ibHJ3vcbYXamsCT7M/hkWHzGWbTONYBgIi
-# ZtVhAsVjj9Si8bZeJQt3lunNcUAziCns7vOibbxNtT4GS8lzM8oIFC09TOiwunWm
-# dC2kWDpsE0n4pRUKFJaFsWpoNCVCr5ZW9BD6JH3xK3LBFuFr6+apmMc+WvTQGJ39
-# dJeGd0YqPSN9KHOKru8rG5q/bFOnFJ48h3HAXo7I+9MqkjPqV01eB17KwRisgS0a
-# Ifpuz5dhe99xejrKY/fVMEQ3Mv67Q4XcuvymyjMZK3dt28sF8H5fdS6itr81qjZj
-# yc5k2b38vCzzSVYAyBIrxie7N69X78TPHinE9OItziphz1ft9QpA4vUY1h7pkC/K
-# 04dfk4pIGhEd5TeFny5mYppegU6VrFVXQ9xTiyV+PGEPigu69T+m1473BFZeIbuf
-# 12pxgL+W3nID2NgiK/MnFk846FFADK6S7749ffeAxkw2V4SVp4QVSDAOUicIjY6i
-# vSLHGcmmyg6oejbbarphXxEklaTijmjuGalJmV7QtDS91vlAxxCXMVI5NSkRhyTT
-# xPupY8t3SNX6Yvwk4AR6TtDkbt7OnjhQJvQhcWXXCSXUyQcAerjH83foxdTiVdDT
-# HvZ/UuJJjbkRcgyIRCYzZgFE3+QzDiHeYolIB9r1MIIHsTCCBZmgAwIBAgIMBmw4
-# iuAOfBdrKw0JMA0GCSqGSIb3DQEBCwUAMFwxCzAJBgNVBAYTAkJFMRkwFwYDVQQK
-# ExBHbG9iYWxTaWduIG52LXNhMTIwMAYDVQQDEylHbG9iYWxTaWduIEdDQyBSNDUg
-# RVYgQ29kZVNpZ25pbmcgQ0EgMjAyMDAeFw0yNTAxMjgxMDI4MzNaFw0yODAxMjkx
-# MDI4MzNaMIH3MR0wGwYDVQQPDBRQcml2YXRlIE9yZ2FuaXphdGlvbjESMBAGA1UE
-# BRMJNTEyMjkxNjQyMRMwEQYLKwYBBAGCNzwCAQMTAklMMQswCQYDVQQGEwJJTDEQ
-# MA4GA1UECBMHQ2VudHJhbDEUMBIGA1UEBxMLUGV0YWggVGlrdmExEzARBgNVBAkT
-# CjkgSGFwc2Fnb3QxHzAdBgNVBAoTFkN5YmVyQXJrIFNvZnR3YXJlIEx0ZC4xHzAd
-# BgNVBAMTFkN5YmVyQXJrIFNvZnR3YXJlIEx0ZC4xITAfBgkqhkiG9w0BCQEWEmFk
-# bWluQGN5YmVyYXJrLmNvbTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIB
-# ANZQPlxrcfMjyi+hhEn41HogbUr17cJB+2rbTOBphAPzZEySpd+GObt2pAyYbXTb
-# 1XGHRomYxq/fTVcDWn6ESHKqIpTUnTsai2FakMr4OINfey2c0Lw81SCwedG6ind+
-# QxszJ3c1iAoyuO8fbNAJJQHKTNAdTCADAHrfHvv8fuF8iw8vZCP5E6JFdcvaNUL9
-# 9lecTTlIuXMyfLoO/9Q6geZ30UeSibynHoZbGzzK20pxL9VM5LA9YiGtA+bfdRGe
-# hlqhPD4KgBRkc9bogTxA78QaiBUEnYM1vMmKc86MjXSS6R+z5mFAdhcs5C6cqWdO
-# wo5jVFXpwxQh0jNTalt/kkwTjlIeO3+fdDDYLmbmH3nIsMutaHyXPogVp7upktz9
-# WeS9r0ZpqKw7viVe/CWS9Df8/ceZD9zBkIbTrYGFU02hDaWaN1pFs6V21iaiTaZX
-# pnnpEbtgoy8rptlFFIf0GQBDD0mTBDm7lZ8rDfN7IECcahCN4dMfnFO/QFpxAILa
-# ekomXUmtkH3WBaQl4hraHja+fCi4ZtKhYYTZWdakH6bvdkENywuze/liwv2OVdZ4
-# qddJpbvblqa9jqnV8RhugofYVEBq6yyd6OgJosdFPIZN7upzrCmHJTiTDtBNQJ2z
-# m7LXrryUF9yTyjeUjLbUfTKbpj4UzM3jcKu1J5jDL5zFAgMBAAGjggHVMIIB0TAO
-# BgNVHQ8BAf8EBAMCB4AwgZ8GCCsGAQUFBwEBBIGSMIGPMEwGCCsGAQUFBzAChkBo
-# dHRwOi8vc2VjdXJlLmdsb2JhbHNpZ24uY29tL2NhY2VydC9nc2djY3I0NWV2Y29k
-# ZXNpZ25jYTIwMjAuY3J0MD8GCCsGAQUFBzABhjNodHRwOi8vb2NzcC5nbG9iYWxz
-# aWduLmNvbS9nc2djY3I0NWV2Y29kZXNpZ25jYTIwMjAwVQYDVR0gBE4wTDBBBgkr
-# BgEEAaAyAQIwNDAyBggrBgEFBQcCARYmaHR0cHM6Ly93d3cuZ2xvYmFsc2lnbi5j
-# b20vcmVwb3NpdG9yeS8wBwYFZ4EMAQMwCQYDVR0TBAIwADBHBgNVHR8EQDA+MDyg
-# OqA4hjZodHRwOi8vY3JsLmdsb2JhbHNpZ24uY29tL2dzZ2NjcjQ1ZXZjb2Rlc2ln
-# bmNhMjAyMC5jcmwwHQYDVR0RBBYwFIESYWRtaW5AY3liZXJhcmsuY29tMBMGA1Ud
-# JQQMMAoGCCsGAQUFBwMDMB8GA1UdIwQYMBaAFCWd0PxZCYZjxezzsRM7VxwDkjYR
-# MB0GA1UdDgQWBBQewhxJyrlxdN3533DHK3x6hrz7uzANBgkqhkiG9w0BAQsFAAOC
-# AgEAWgNDad105JaVijYhNrwnSPmm1mIhDpSvPDvIR4pENU9IdPcI8rxXRmJ083JM
-# vIx5p7LvuBOTkyaNgZOjmkypMNM4NtMtHHdXAiWb6T+Udv4w0lcgUBWapeRxO7X5
-# ok+E9lrVeSiiSrM/6TDF3xkAwcR5CzYjEYsgYa0H+hBXl9+oXe2QYFuArlQ0OfTv
-# nXr2iFlvl0AKR7fRY0qBBGoKUATjGiYUFcigc9PyW2vml1BMxXx65jkKdoPIMZSJ
-# Ka7xkExONB+t3uJc8yI+n2x24k1bjl8mJdnEkryUATe58vLxfYa93mLFC7VLCTND
-# cJjFBvdL86F1HyveXhHX5XMlS/HPcnRk6VV8+zkr72fGP18cxl1nOAftgjOxh0mD
-# Y6l9UMkOle1gSlf/S15z6VlRx+TkE/ZeL2n/tw4zHqWaNatHy+Zs2BIzaMdzP/u4
-# tYTOuhQfXYnP5zrGw5ldYkIAQawVZwcODVO+FBb8/F3uTBbiMqCaOxy8RGLTqJlI
-# bk+fBnkgtYyiIglUE10Y/FwI4qMgG2iZh97WsISLblu4Lfz9t7/bo54Y4bGqOdnW
-# rz6e4hDhlkozop7MHG35nqHRN5Qx4iUDxvyDJLpZXG0kes+Cx+zkqhGvz9ST0bB6
-# WH5RcnIk2Rog6Rr/bs0O1ZMS5DZy6vm1RB5fAZfAZ451uRwxghnUMIIZ0AIBATBs
-# MFwxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9iYWxTaWduIG52LXNhMTIwMAYD
-# VQQDEylHbG9iYWxTaWduIEdDQyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMAIM
-# Bmw4iuAOfBdrKw0JMA0GCWCGSAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIBDDECMAAw
-# GQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisG
-# AQQBgjcCARUwLwYJKoZIhvcNAQkEMSIEIDn2TNlG8JTMY5Kct2QwTIP0c7z1foTC
-# eIk8n4Vo9DW6MA0GCSqGSIb3DQEBAQUABIICAFn9i7FQTCXhjhoPjRMiEpLXIRbN
-# MQuU/7XLAlD09/Yi1PmVvolqZlvjvcZ7H0spaNIYaFIiRbhhmA04DUKNXdh5h0Mj
-# qEeiKDvzrnKmg1EmBxGC/vmxYup+lcIzjj6dR/4++MbQnIAXR5pWyZSMFyi2mzP1
-# aIBTo7K14sh6HFWN9TxY05NQYTg8aSZy3ALUT2h7zFWPi1jphxnXAjui9wSZAkWU
-# QbLOyIbXKLuXWGB3uADBIYaasy490xllaU8kk7smw7GZZeXxYA6D9qY7JAtci9t2
-# iU4oV6msZ0e2S5PpcvPLFKEUCrywYb4S0zkUg3DR9gSL0IgWO7jzQShg8Va6C9v0
-# YjLoC/uEBkCiWU3//ITiGDY1pbvw/W4jKBVPSZYGyhVtOlRA3P3G/hrAcILZ8eiE
-# +ZAh1Wilcol3uTv2ZhKNsTQrGkQm+jr3rlDmjJHHVO4lqPgSESvIpZlXy4sYxnqs
-# ahCKJjyjx+CGmHijD49IcnJvs1+FHm9DznlIgMEIT2g43M9EcH28hdtwx1ybWa3e
-# DCAAYpf+Xr4TqQ5ZKXv5QOFenyyQMLqav+Gi1HVgZEoIAIDpuEXMkFmh0cEc5vih
-# dYIQpwBSBjR7rYtGYi5a9TUmTlOmD4KZUVAi7aUWw2+IF/wpcsSRgSccALUrPLu1
-# QsfrLBMBIoAgVKk9oYIWuzCCFrcGCisGAQQBgjcDAwExghanMIIWowYJKoZIhvcN
-# AQcCoIIWlDCCFpACAQMxDTALBglghkgBZQMEAgEwgd8GCyqGSIb3DQEJEAEEoIHP
-# BIHMMIHJAgEBBgsrBgEEAaAyAgMBAjAxMA0GCWCGSAFlAwQCAQUABCA5wADKd4b5
-# htnVC8dvwSySdbim6ckaDKsg1oF9Uqjv9gIUamWURbz5smMtKxMu296/LzQVD44Y
-# DzIwMjYwMjI0MDk0ODUyWjADAgEBoFikVjBUMQswCQYDVQQGEwJCRTEZMBcGA1UE
-# CgwQR2xvYmFsU2lnbiBudi1zYTEqMCgGA1UEAwwhR2xvYmFsc2lnbiBUU0EgZm9y
-# IENvZGVTaWduMSAtIFI2oIISSzCCBmMwggRLoAMCAQICEAEACyAFs5QHYts+NnmU
-# m6kwDQYJKoZIhvcNAQEMBQAwWzELMAkGA1UEBhMCQkUxGTAXBgNVBAoTEEdsb2Jh
-# bFNpZ24gbnYtc2ExMTAvBgNVBAMTKEdsb2JhbFNpZ24gVGltZXN0YW1waW5nIENB
-# IC0gU0hBMzg0IC0gRzQwHhcNMjUwNDExMTQ0NzM5WhcNMzQxMjEwMDAwMDAwWjBU
-# MQswCQYDVQQGEwJCRTEZMBcGA1UECgwQR2xvYmFsU2lnbiBudi1zYTEqMCgGA1UE
-# AwwhR2xvYmFsc2lnbiBUU0EgZm9yIENvZGVTaWduMSAtIFI2MIIBojANBgkqhkiG
-# 9w0BAQEFAAOCAY8AMIIBigKCAYEAolvEqk1J5SN4PuCF6+aqCj7V8qyop0Rh94rL
-# mY37Cn8er80SkfKzdJHJk3Tqa9QY4UwV6hedXfSb5gk0Xydy3MNEj1qE+ZomPEcj
-# C7uRtGdfB/PtnieWJzjtPVUlmEPrUMsoFU7woJScRV1W6/6efi2BySHXshZ30V1E
-# DZ2lKQ0DK3q3bI4sJE/5n/dQy8iL4hjTaS9v0YQy5RJY+o1NWhxP/HsNum67Or4r
-# FDsGIE85hg5r4g3CXFuiqWvlNmPbCBWgdxp/PCqY0Lie04DuKbDwRd6nrm5AH5oI
-# RJyFUjLvG4HO0L1UXYMuJ6J1JzO438RA0mJRvU2ZwbI6yiFHaS0x3SgFakvhELLn
-# 4tmwngYPj+FDX3LaWHnni/MGJXRxnN0pQdYJqEYhKUlrMH9+2Klndcz/9yXYGEyw
-# Tt88d3y+TUFvZlAA0BMOYMMrYFQEptlRg2DYrx5sWtX1qvCzk6sEBLRVPEbE0i+J
-# 01ILlBzRpcJusZUQyGK2RVSOFfXPAgMBAAGjggGoMIIBpDAOBgNVHQ8BAf8EBAMC
-# B4AwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgwHQYDVR0OBBYEFIBDTPy6bR0T0nUS
-# iAl3b9vGT5VUMFYGA1UdIARPME0wCAYGZ4EMAQQCMEEGCSsGAQQBoDIBHjA0MDIG
-# CCsGAQUFBwIBFiZodHRwczovL3d3dy5nbG9iYWxzaWduLmNvbS9yZXBvc2l0b3J5
-# LzAMBgNVHRMBAf8EAjAAMIGQBggrBgEFBQcBAQSBgzCBgDA5BggrBgEFBQcwAYYt
-# aHR0cDovL29jc3AuZ2xvYmFsc2lnbi5jb20vY2EvZ3N0c2FjYXNoYTM4NGc0MEMG
-# CCsGAQUFBzAChjdodHRwOi8vc2VjdXJlLmdsb2JhbHNpZ24uY29tL2NhY2VydC9n
-# c3RzYWNhc2hhMzg0ZzQuY3J0MB8GA1UdIwQYMBaAFOoWxmnn48tXRTkzpPBAvtDD
-# vWWWMEEGA1UdHwQ6MDgwNqA0oDKGMGh0dHA6Ly9jcmwuZ2xvYmFsc2lnbi5jb20v
-# Y2EvZ3N0c2FjYXNoYTM4NGc0LmNybDANBgkqhkiG9w0BAQwFAAOCAgEAt6bHSpl2
-# dP0gYie9iXw3Bz5XzwsvmiYisEjboyRZin+jqH26IFq7fQMIrN5VdX8KGl5pEe21
-# b8skPfUctiroo6QS5oWESl4kzZow2iJ/qJn76TkvL+v2f4mHolGLBwyDm74fXr68
-# W63xuiYSpnbf7NYPyBaHI7zJ/ErST4bA00TC+ftPttS+G/MhNUaKg34yaJ8Z6AEN
-# nPdCB8VIrt/sqd6R1k89Ojx1jL36QBEPUr2dtIIlS3Ki74CU15YTvG+Xxt9cwE+0
-# Gx/qRQv8YbF+UcsdgYU4jNRZB0kTV3Bsd3lyIWmt8DT4RQj9LQ1ILOpqG/Czwd9q
-# 9GJL6jSJeSq1AC4ZocVMuqcYd/D9JpIML9BQ/wk5lgJkgXEc1gRgPsDsU9zz36Jy
-# mN1+Yhvx0Vr67jr0Qfqk3V0z6/xVmEAJKafTeIfD9hQchjiGkyw3EKNiyHyM37rd
-# K/BsTSx0rB3MHdqE9/dHQX5NUOQCWUvhkWy10u71yzGKWnbAWQ6NNuq9ftcwYFTm
-# cyo5YbFwzfkyS+Y78+O9utqgi6VoE2NzVJbucqGLZtJFJzGJD7xe/rqULwYHeQ3H
-# PSnNCagb6jqBeFSnXTx0GbuYuk3jA51dQNtsogVAGXCqHsh62QVAl/gadTfcRaMp
-# IWAc3CPup3x19dDApspmRyOVzXBUtsiCWsIwggZZMIIEQaADAgECAg0B7BySQN79
-# LkBdfEd0MA0GCSqGSIb3DQEBDAUAMEwxIDAeBgNVBAsTF0dsb2JhbFNpZ24gUm9v
-# dCBDQSAtIFI2MRMwEQYDVQQKEwpHbG9iYWxTaWduMRMwEQYDVQQDEwpHbG9iYWxT
-# aWduMB4XDTE4MDYyMDAwMDAwMFoXDTM0MTIxMDAwMDAwMFowWzELMAkGA1UEBhMC
-# QkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExMTAvBgNVBAMTKEdsb2JhbFNp
-# Z24gVGltZXN0YW1waW5nIENBIC0gU0hBMzg0IC0gRzQwggIiMA0GCSqGSIb3DQEB
-# AQUAA4ICDwAwggIKAoICAQDwAuIwI/rgG+GadLOvdYNfqUdSx2E6Y3w5I3ltdPwx
-# 5HQSGZb6zidiW64HiifuV6PENe2zNMeswwzrgGZt0ShKwSy7uXDycq6M95laXXau
-# v0SofEEkjo+6xU//NkGrpy39eE5DiP6TGRfZ7jHPvIo7bmrEiPDul/bc8xigS5kc
-# DoenJuGIyaDlmeKe9JxMP11b7Lbv0mXPRQtUPbFUUweLmW64VJmKqDGSO/J6ffwO
-# WN+BauGwbB5lgirUIceU/kKWO/ELsX9/RpgOhz16ZevRVqkuvftYPbWF+lOZTVt0
-# 7XJLog2CNxkM0KvqWsHvD9WZuT/0TzXxnA/TNxNS2SU07Zbv+GfqCL6PSXr/kLHU
-# 9ykV1/kNXdaHQx50xHAotIB7vSqbu4ThDqxvDbm19m1W/oodCT4kDmcmx/yyDaCU
-# sLKUzHvmZ/6mWLLU2EESwVX9bpHFu7FMCEue1EIGbxsY1TbqZK7O/fUF5uJm0A4F
-# IayxEQYjGeT7BTRE6giunUlnEYuC5a1ahqdm/TMDAd6ZJflxbumcXQJMYDzPAo8B
-# /XLukvGnEt5CEk3sqSbldwKsDlcMCdFhniaI/MiyTdtk8EWfusE/VKPYdgKVbGqN
-# yiJc9gwE4yn6S7Ac0zd0hNkdZqs0c48efXxeltY9GbCX6oxQkW2vV4Z+EDcdaxoU
-# 3wIDAQABo4IBKTCCASUwDgYDVR0PAQH/BAQDAgGGMBIGA1UdEwEB/wQIMAYBAf8C
-# AQAwHQYDVR0OBBYEFOoWxmnn48tXRTkzpPBAvtDDvWWWMB8GA1UdIwQYMBaAFK5s
-# BaOTE+Ki5+LXHNbH8H/IZ1OgMD4GCCsGAQUFBwEBBDIwMDAuBggrBgEFBQcwAYYi
-# aHR0cDovL29jc3AyLmdsb2JhbHNpZ24uY29tL3Jvb3RyNjA2BgNVHR8ELzAtMCug
-# KaAnhiVodHRwOi8vY3JsLmdsb2JhbHNpZ24uY29tL3Jvb3QtcjYuY3JsMEcGA1Ud
-# IARAMD4wPAYEVR0gADA0MDIGCCsGAQUFBwIBFiZodHRwczovL3d3dy5nbG9iYWxz
-# aWduLmNvbS9yZXBvc2l0b3J5LzANBgkqhkiG9w0BAQwFAAOCAgEAf+KI2VdnK0Jf
-# gacJC7rEuygYVtZMv9sbB3DG+wsJrQA6YDMfOcYWaxlASSUIHuSb99akDY8elvKG
-# ohfeQb9P4byrze7AI4zGhf5LFST5GETsH8KkrNCyz+zCVmUdvX/23oLIt59h07VG
-# SJiXAmd6FpVK22LG0LMCzDRIRVXd7OlKn14U7XIQcXZw0g+W8+o3V5SRGK/cjZk4
-# GVjCqaF+om4VJuq0+X8q5+dIZGkv0pqhcvb3JEt0Wn1yhjWzAlcfi5z8u6xM3vre
-# U0yD/RKxtklVT3WdrG9KyC5qucqIwxIwTrIIc59eodaZzul9S5YszBZrGM3kWTeG
-# CSziRdayzW6CdaXajR63Wy+ILj198fKRMAWcznt8oMWsr1EG8BHHHTDFUVZg6HyV
-# PSLj1QokUyeXgPpIiScseeI85Zse46qEgok+wEr1If5iEO0dMPz2zOpIJ3yLdUJ/
-# a8vzpWuVHwRYNAqJ7YJQ5NF7qMnmvkiqK1XZjbclIA4bUaDUY6qD6mxyYUrJ+kPE
-# xlfFnbY8sIuwuRwx773vFNgUQGwgHcIt6AvGjW2MtnHtUiH+PvafnzkarqzSL3og
-# sfSsqh3iLRSd+pZqHcY8yvPZHL9TTaRHWXyVxENB+SXiLBB+gfkNlKd98rUJ9dhg
-# ckBQlSDUQ0S++qCV5yBZtnjGpGqqIpswggWDMIIDa6ADAgECAg5F5rsDgzPDhWVI
-# 5v9FUTANBgkqhkiG9w0BAQwFADBMMSAwHgYDVQQLExdHbG9iYWxTaWduIFJvb3Qg
-# Q0EgLSBSNjETMBEGA1UEChMKR2xvYmFsU2lnbjETMBEGA1UEAxMKR2xvYmFsU2ln
-# bjAeFw0xNDEyMTAwMDAwMDBaFw0zNDEyMTAwMDAwMDBaMEwxIDAeBgNVBAsTF0ds
-# b2JhbFNpZ24gUm9vdCBDQSAtIFI2MRMwEQYDVQQKEwpHbG9iYWxTaWduMRMwEQYD
-# VQQDEwpHbG9iYWxTaWduMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
-# lQfoc8pm+ewUyns89w0I8bRFCyyCtEjG61s8roO4QZIzFKRvf+kqzMawiGvFtonR
-# xrL/FM5RFCHsSt0bWsbWh+5NOhUG7WRmC5KAykTec5RO86eJf094YwjIElBtQmYv
-# Tbl5KE1SGooagLcZgQ5+xIq8ZEwhHENo1z08isWyZtWQmrcxBsW+4m0yBqYe+bnr
-# qqO4v76CY1DQ8BiJ3+QPefXqoh8q0nAue+e8k7ttU+JIfIwQBzj/ZrJ3YX7g6ow8
-# qrSk9vOVShIHbf2MsonP0KBhd8hYdLDUIzr3XTrKotudCd5dRC2Q8YHNV5L6frxQ
-# BGM032uTGL5rNrI55KwkNrfw77YcE1eTtt6y+OKFt3OiuDWqRfLgnTahb1SK8XJW
-# bi6IxVFCRBWU7qPFOJabTk5aC0fzBjZJdzC8cTflpuwhCHX85mEWP3fV2ZGXhAps
-# 1AJNdMAU7f05+4PyXhShBLAL6f7uj+FuC7IIs2FmCWqxBjplllnA8DX9ydoojRoR
-# h3CBCqiadR2eOoYFAJ7bgNYl+dwFnidZTHY5W+r5paHYgw/R/98wEfmFzzNI9cpt
-# ZBQselhP00sIScWVZBpjDnk99bOMylitnEJFeW4OhxlcVLFltr+Mm9wT6Q1vuC7c
-# Z27JixG1hBSKABlwg3mRl5HUGie/Nx4yB9gUYzwoTK8CAwEAAaNjMGEwDgYDVR0P
-# AQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFK5sBaOTE+Ki5+LX
-# HNbH8H/IZ1OgMB8GA1UdIwQYMBaAFK5sBaOTE+Ki5+LXHNbH8H/IZ1OgMA0GCSqG
-# SIb3DQEBDAUAA4ICAQCDJe3o0f2VUs2ewASgkWnmXNCE3tytok/oR3jWZZipW6g8
-# h3wCitFutxZz5l/AVJjVdL7BzeIRka0jGD3d4XJElrSVXsB7jpl4FkMTVlezorM7
-# tXfcQHKso+ubNT6xCCGh58RDN3kyvrXnnCxMvEMpmY4w06wh4OMd+tgHM3ZUACIq
-# uU0gLnBo2uVT/INc053y/0QMRGby0uO9RgAabQK6JV2NoTFR3VRGHE3bmZbvGhwE
-# XKYV73jgef5d2z6qTFX9mhWpb+Gm+99wMOnD7kJG7cKTBYn6fWN7P9BxgXwA6Jiu
-# Dng0wyX7rwqfIGvdOxOPEoziQRpIenOgd2nHtlx/gsge/lgbKCuobK1ebcAF0nu3
-# 64D+JTf+AptorEJdw+71zNzwUHXSNmmc5nsE324GabbeCglIWYfrexRgemSqaUPv
-# kcdM7BjdbO9TLYyZ4V7ycj7PVMi9Z+ykD0xF/9O5MCMHTI8Qv4aW2ZlatJlXHKTM
-# uxWJU7osBQ/kxJ4ZsRg01Uyduu33H68klQR4qAO77oHl2l98i0qhkHQlp7M+S8gs
-# Vr3HyO844lyS8Hn3nIS6dC1hASB+ftHyTwdZX4stQ1LrRgyU4fVmR3l31VRbH60k
-# N8tFWk6gREjI2LCZxRWECfbWSUnAZbjmGnFuoKjxguhFPmzWAtcKZ4MFWsmkEDGC
-# A0kwggNFAgEBMG8wWzELMAkGA1UEBhMCQkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24g
-# bnYtc2ExMTAvBgNVBAMTKEdsb2JhbFNpZ24gVGltZXN0YW1waW5nIENBIC0gU0hB
-# Mzg0IC0gRzQCEAEACyAFs5QHYts+NnmUm6kwCwYJYIZIAWUDBAIBoIIBLTAaBgkq
-# hkiG9w0BCQMxDQYLKoZIhvcNAQkQAQQwKwYJKoZIhvcNAQk0MR4wHDALBglghkgB
-# ZQMEAgGhDQYJKoZIhvcNAQELBQAwLwYJKoZIhvcNAQkEMSIEIBhLXgNIjwD+jLzv
-# X9nvZnR5Tb6GZobi9xP0bVue1YboMIGwBgsqhkiG9w0BCRACLzGBoDCBnTCBmjCB
-# lwQgcl7yf0jhbmm5Y9hCaIxbygeojGkXBkLI/1ord69gXP0wczBfpF0wWzELMAkG
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCiAUPjqeAf/zWO
+# EMcWvfjfoI1qkrwCw+MGChb1LYc1AaCCDq8wggboMIIE0KADAgECAhB3vQ4Ft1kL
+# th1HYVMeP3XtMA0GCSqGSIb3DQEBCwUAMFMxCzAJBgNVBAYTAkJFMRkwFwYDVQQK
+# ExBHbG9iYWxTaWduIG52LXNhMSkwJwYDVQQDEyBHbG9iYWxTaWduIENvZGUgU2ln
+# bmluZyBSb290IFI0NTAeFw0yMDA3MjgwMDAwMDBaFw0zMDA3MjgwMDAwMDBaMFwx
+# CzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9iYWxTaWduIG52LXNhMTIwMAYDVQQD
+# EylHbG9iYWxTaWduIEdDQyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0EgMjAyMDCCAiIw
+# DQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAMsg75ceuQEyQ6BbqYoj/SBerjgS
+# i8os1P9B2BpV1BlTt/2jF+d6OVzA984Ro/ml7QH6tbqT76+T3PjisxlMg7BKRFAE
+# eIQQaqTWlpCOgfh8qy+1o1cz0lh7lA5tD6WRJiqzg09ysYp7ZJLQ8LRVX5YLEeWa
+# tSyyEc8lG31RK5gfSaNf+BOeNbgDAtqkEy+FSu/EL3AOwdTMMxLsvUCV0xHK5s2z
+# BZzIU+tS13hMUQGSgt4T8weOdLqEgJ/SpBUO6K/r94n233Hw0b6nskEzIHXMsdXt
+# HQcZxOsmd/KrbReTSam35sOQnMa47MzJe5pexcUkk2NvfhCLYc+YVaMkoog28vmf
+# vpMusgafJsAMAVYS4bKKnw4e3JiLLs/a4ok0ph8moKiueG3soYgVPMLq7rfYrWGl
+# r3A2onmO3A1zwPHkLKuU7FgGOTZI1jta6CLOdA6vLPEV2tG0leis1Ult5a/dm2tj
+# IF2OfjuyQ9hiOpTlzbSYszcZJBJyc6sEsAnchebUIgTvQCodLm3HadNutwFsDeCX
+# pxbmJouI9wNEhl9iZ0y1pzeoVdwDNoxuz202JvEOj7A9ccDhMqeC5LYyAjIwfLWT
+# yCH9PIjmaWP47nXJi8Kr77o6/elev7YR8b7wPcoyPm593g9+m5XEEofnGrhO7izB
+# 36Fl6CSDySrC/blTAgMBAAGjggGtMIIBqTAOBgNVHQ8BAf8EBAMCAYYwEwYDVR0l
+# BAwwCgYIKwYBBQUHAwMwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQUJZ3Q
+# /FkJhmPF7POxEztXHAOSNhEwHwYDVR0jBBgwFoAUHwC/RoAK/Hg5t6W0Q9lWULvO
+# ljswgZMGCCsGAQUFBwEBBIGGMIGDMDkGCCsGAQUFBzABhi1odHRwOi8vb2NzcC5n
+# bG9iYWxzaWduLmNvbS9jb2Rlc2lnbmluZ3Jvb3RyNDUwRgYIKwYBBQUHMAKGOmh0
+# dHA6Ly9zZWN1cmUuZ2xvYmFsc2lnbi5jb20vY2FjZXJ0L2NvZGVzaWduaW5ncm9v
+# dHI0NS5jcnQwQQYDVR0fBDowODA2oDSgMoYwaHR0cDovL2NybC5nbG9iYWxzaWdu
+# LmNvbS9jb2Rlc2lnbmluZ3Jvb3RyNDUuY3JsMFUGA1UdIAROMEwwQQYJKwYBBAGg
+# MgECMDQwMgYIKwYBBQUHAgEWJmh0dHBzOi8vd3d3Lmdsb2JhbHNpZ24uY29tL3Jl
+# cG9zaXRvcnkvMAcGBWeBDAEDMA0GCSqGSIb3DQEBCwUAA4ICAQAldaAJyTm6t6E5
+# iS8Yn6vW6x1L6JR8DQdomxyd73G2F2prAk+zP4ZFh8xlm0zjWAYCImbVYQLFY4/U
+# ovG2XiULd5bpzXFAM4gp7O7zom28TbU+BkvJczPKCBQtPUzosLp1pnQtpFg6bBNJ
+# +KUVChSWhbFqaDQlQq+WVvQQ+iR98StywRbha+vmqZjHPlr00Bid/XSXhndGKj0j
+# fShziq7vKxuav2xTpxSePIdxwF6OyPvTKpIz6ldNXgdeysEYrIEtGiH6bs+XYXvf
+# cXo6ymP31TBENzL+u0OF3Lr8psozGSt3bdvLBfB+X3Uuora/Nao2Y8nOZNm9/Lws
+# 80lWAMgSK8YnuzevV+/Ezx4pxPTiLc4qYc9X7fUKQOL1GNYe6ZAvytOHX5OKSBoR
+# HeU3hZ8uZmKaXoFOlaxVV0PcU4slfjxhD4oLuvU/pteO9wRWXiG7n9dqcYC/lt5y
+# A9jYIivzJxZPOOhRQAyuku++PX33gMZMNleElaeEFUgwDlInCI2Oor0ixxnJpsoO
+# qHo222q6YV8RJJWk4o5o7hmpSZle0LQ0vdb5QMcQlzFSOTUpEYck08T7qWPLd0jV
+# +mL8JOAEek7Q5G7ezp44UCb0IXFl1wkl1MkHAHq4x/N36MXU4lXQ0x72f1LiSY25
+# EXIMiEQmM2YBRN/kMw4h3mKJSAfa9TCCB78wggWnoAMCAQICDFvWkQMw/ZfAZpUM
+# wDANBgkqhkiG9w0BAQsFADBcMQswCQYDVQQGEwJCRTEZMBcGA1UEChMQR2xvYmFs
+# U2lnbiBudi1zYTEyMDAGA1UEAxMpR2xvYmFsU2lnbiBHQ0MgUjQ1IEVWIENvZGVT
+# aWduaW5nIENBIDIwMjAwHhcNMjYwMzAyMjE1MjMzWhcNMjcwMjI3MTM0MDU2WjCC
+# AQQxHTAbBgNVBA8MFFByaXZhdGUgT3JnYW5pemF0aW9uMRIwEAYDVQQFEwk1MTIy
+# OTE2NDIxEzARBgsrBgEEAYI3PAIBAxMCSUwxCzAJBgNVBAYTAklMMRkwFwYDVQQI
+# ExBDZW50cmFsIERpc3RyaWN0MRQwEgYDVQQHEwtQZXRhaCBUaWt2YTEXMBUGA1UE
+# CRMOOSBIYXBzYWdvdCBTdC4xHzAdBgNVBAoTFkN5YmVyQXJrIFNvZnR3YXJlIEx0
+# ZC4xHzAdBgNVBAMTFkN5YmVyQXJrIFNvZnR3YXJlIEx0ZC4xITAfBgkqhkiG9w0B
+# CQEWEmFkbWluQGN5YmVyYXJrLmNvbTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCC
+# AgoCggIBAKtAr5PeV7TdJZDWUNp8j60tepBmgC2+9Dw8tUh+RsLhqaSNi0dUc7i9
+# yznveSdnfE4l2U8ZXyEILjQsSJw3SaPaXMSOzR4wVnuTc1nTzKBOS3oa6Yil7rlu
+# gNXVj8dmEEehcPuAkF4ciqt6YChi5a6DD/r8GYuHv+/75XDZCD1nTPesDLIN+RAU
+# aqHWLF0XRDXwF/JgB6W+lzIuYeiXdM/jPxZqvg1d7WKZQCy0maucWE/n4N4/8nPT
+# qLm3y8jhUdP6YGUlyJLbC4fxbVW1KrhDMY1DOOtItuBiOeBVAvVctbw/kAvEc32Y
+# Iz3qIWTmcR0VzVVV6IlNWOrMqJZEvtHlqRVkekLJXB5pVw6b3PuelU92cb+VtUnB
+# hewMxSkPj8094wN7urFk7wXxVtNVTYtkmT5ThcphO5Sha1bCfTgymePAfUJW2p2o
+# FdNBDeMoSmVlTDDlffRpyMzFZpHpc6v0HzeLmkEcZk+HRf5dgeRMQZWt/Mgsizwe
+# w0RuaCeQlphX7RgBRkC9rT57RCcBMtW3blk4Vz6qncCKCLBCJK1CIrC2frGX7vqt
+# In+0zR1K0ec8tTH5im5QEE72MuMV+/4KbP+ISojaQ8JFZvqESxyAUbjpQcE2pfzv
+# fwKiSXTyOCv9buuHDViUhoSc9oEKA3iuhc8Yz21F4CO0MTj014+FAgMBAAGjggHV
+# MIIB0TAOBgNVHQ8BAf8EBAMCB4AwgZ8GCCsGAQUFBwEBBIGSMIGPMEwGCCsGAQUF
+# BzAChkBodHRwOi8vc2VjdXJlLmdsb2JhbHNpZ24uY29tL2NhY2VydC9nc2djY3I0
+# NWV2Y29kZXNpZ25jYTIwMjAuY3J0MD8GCCsGAQUFBzABhjNodHRwOi8vb2NzcC5n
+# bG9iYWxzaWduLmNvbS9nc2djY3I0NWV2Y29kZXNpZ25jYTIwMjAwVQYDVR0gBE4w
+# TDBBBgkrBgEEAaAyAQIwNDAyBggrBgEFBQcCARYmaHR0cHM6Ly93d3cuZ2xvYmFs
+# c2lnbi5jb20vcmVwb3NpdG9yeS8wBwYFZ4EMAQMwCQYDVR0TBAIwADBHBgNVHR8E
+# QDA+MDygOqA4hjZodHRwOi8vY3JsLmdsb2JhbHNpZ24uY29tL2dzZ2NjcjQ1ZXZj
+# b2Rlc2lnbmNhMjAyMC5jcmwwHQYDVR0RBBYwFIESYWRtaW5AY3liZXJhcmsuY29t
+# MBMGA1UdJQQMMAoGCCsGAQUFBwMDMB8GA1UdIwQYMBaAFCWd0PxZCYZjxezzsRM7
+# VxwDkjYRMB0GA1UdDgQWBBR/nObXnnoINvefWdWmW4iZSqmPAjANBgkqhkiG9w0B
+# AQsFAAOCAgEAvpUZ9sMYv3kb7+v5CzJoUgOAtOF21kKgzqrgRmwH/xyuXkhs+tY9
+# LCE3ldhZmAJIfgBKZuKUQL5eFmLHltBevBKfgmfaT6uoG0sJ3QyNu46m2hMr/gvm
+# Kms2zfFGOZxG8wHeZUQ1v8imN80Frvvy1DIdA1QOW4hIJvt1GbCaS6TTC3eO9/fO
+# r22hHk0IBt+LtmSeA/rdFsnwT4Y4SY4mebZZePHH9c+KreM64DAP61rLodKQCw14
+# jbPTlQRSelbJpb+Vmo7q1sieuCY5US2KsXG/4P/ENEJFnwH+ib671IjN7L4AISzt
+# BoKY81CNMBSziqMpdCwrAiXBQhBHdKUG28MhrxS1gB564h+fo9tMrV5pe6Jp60Sa
+# Wn5aQzu/nWR6z+gUR9mk5SdjBow+Liykxd/2o5wT8AmJ6XE/vGd7lK8MnuoTeJ65
+# WQOsMd7MyB4tP3CV9/r+JESfPExxK3ybfWp1cAigtzpGII2fUM0sx43Wd7w0Ugfp
+# OjmGOUKpshp6zJAqG+NNbupqk5vHAiddvHHRrZGLF7qbc0jcdQyxygyxQLe5Quu3
+# M/bZ5+b4T+4xT/b0hmU4WmiHV8h3OF6U6OvIU2+gJ8NtRSkl+Jz/nhhU5hhNh2Ad
+# TB108wYNMYET2xxoxtEPL5Sb0rX07I4lEGPpbwAcP1jds2+pgeB1pYcxghnUMIIZ
+# 0AIBATBsMFwxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9iYWxTaWduIG52LXNh
+# MTIwMAYDVQQDEylHbG9iYWxTaWduIEdDQyBSNDUgRVYgQ29kZVNpZ25pbmcgQ0Eg
+# MjAyMAIMW9aRAzD9l8BmlQzAMA0GCWCGSAFlAwQCAQUAoHwwEAYKKwYBBAGCNwIB
+# DDECMAAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEO
+# MAwGCisGAQQBgjcCARUwLwYJKoZIhvcNAQkEMSIEIHtjH3zO8E0fKGdRT+sghvPN
+# P/C8DKwkC2e+zTr2iRG/MA0GCSqGSIb3DQEBAQUABIICABk0fSsNMIKOcpdD1+f8
+# q82WYSfjO1FjLXgnZC/cWnXGNje0F0Lj9HHGJRfrI/mYSzuQjAuduCQypplLuzaG
+# tup/RUyyrr9s1C/vQ3P6LA9/zTQUfUWX/3phPAbWNcABEHtVDRn9Y+0javAT9AGK
+# d8l/koWOwkyhncBOJef+0dmWut9AZoLeF2F8OIL5Dr778Rbn+B41UbKSAI+fLkb1
+# mW364OXx1r8oYo9SMFdQyVSbdIxWmUjRAVb7YCRk4wMgry7zeVATtK9N9D3X0NUb
+# HblXm9uiLK2PF8VbRA1mV7dHDoh3lElLls4PxC+hUHtj7YdHJIZywoxGCxIcf77X
+# t4psauLGol5EAXIaj6qHTg1Y/759T/1gDScvukRpR4cviRKeNJguNI0fRhzIIshW
+# XuBZaYP2O2JzpxlrffnDeJnyvgAnG/mlHAmkc8HM3vaxp/KGEP7p4LILzwBJgypK
+# jROLeNwg3/k6ijYRrx4+TP0Wk8NNSX0cFpQ3JQCtfbWt5/fJR/3kGRNfgacbSAyT
+# KzUVdxEwn054QP5Fulw8t8jO7ItZHZUNaNSIwPMJhBKwapEuyxSb8YBrAx7j99rD
+# I3KlvEnnCLJhUykcpyr8mlkJGdWU88Tbm+ppc1MI+Vo5Dw/1B3MeXAQk+YtmBK/r
+# dq0tpe+xJfr2lWhRKcGCM8jkoYIWuzCCFrcGCisGAQQBgjcDAwExghanMIIWowYJ
+# KoZIhvcNAQcCoIIWlDCCFpACAQMxDTALBglghkgBZQMEAgEwgd8GCyqGSIb3DQEJ
+# EAEEoIHPBIHMMIHJAgEBBgsrBgEEAaAyAgMBAjAxMA0GCWCGSAFlAwQCAQUABCAy
+# AKaLglchb1tuY11x2w5Ctfs6ZyIxLLBMa3O0xIR/PwIUEHdHCughQYQ//BUCN41V
+# bR8wYKcYDzIwMjYwNDA3MjAwNjA4WjADAgEBoFikVjBUMQswCQYDVQQGEwJCRTEZ
+# MBcGA1UECgwQR2xvYmFsU2lnbiBudi1zYTEqMCgGA1UEAwwhR2xvYmFsc2lnbiBU
+# U0EgZm9yIENvZGVTaWduMSAtIFI2oIISSzCCBmMwggRLoAMCAQICEAEACyAFs5QH
+# Yts+NnmUm6kwDQYJKoZIhvcNAQEMBQAwWzELMAkGA1UEBhMCQkUxGTAXBgNVBAoT
+# EEdsb2JhbFNpZ24gbnYtc2ExMTAvBgNVBAMTKEdsb2JhbFNpZ24gVGltZXN0YW1w
+# aW5nIENBIC0gU0hBMzg0IC0gRzQwHhcNMjUwNDExMTQ0NzM5WhcNMzQxMjEwMDAw
+# MDAwWjBUMQswCQYDVQQGEwJCRTEZMBcGA1UECgwQR2xvYmFsU2lnbiBudi1zYTEq
+# MCgGA1UEAwwhR2xvYmFsc2lnbiBUU0EgZm9yIENvZGVTaWduMSAtIFI2MIIBojAN
+# BgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAolvEqk1J5SN4PuCF6+aqCj7V8qyo
+# p0Rh94rLmY37Cn8er80SkfKzdJHJk3Tqa9QY4UwV6hedXfSb5gk0Xydy3MNEj1qE
+# +ZomPEcjC7uRtGdfB/PtnieWJzjtPVUlmEPrUMsoFU7woJScRV1W6/6efi2BySHX
+# shZ30V1EDZ2lKQ0DK3q3bI4sJE/5n/dQy8iL4hjTaS9v0YQy5RJY+o1NWhxP/HsN
+# um67Or4rFDsGIE85hg5r4g3CXFuiqWvlNmPbCBWgdxp/PCqY0Lie04DuKbDwRd6n
+# rm5AH5oIRJyFUjLvG4HO0L1UXYMuJ6J1JzO438RA0mJRvU2ZwbI6yiFHaS0x3SgF
+# akvhELLn4tmwngYPj+FDX3LaWHnni/MGJXRxnN0pQdYJqEYhKUlrMH9+2Klndcz/
+# 9yXYGEywTt88d3y+TUFvZlAA0BMOYMMrYFQEptlRg2DYrx5sWtX1qvCzk6sEBLRV
+# PEbE0i+J01ILlBzRpcJusZUQyGK2RVSOFfXPAgMBAAGjggGoMIIBpDAOBgNVHQ8B
+# Af8EBAMCB4AwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgwHQYDVR0OBBYEFIBDTPy6
+# bR0T0nUSiAl3b9vGT5VUMFYGA1UdIARPME0wCAYGZ4EMAQQCMEEGCSsGAQQBoDIB
+# HjA0MDIGCCsGAQUFBwIBFiZodHRwczovL3d3dy5nbG9iYWxzaWduLmNvbS9yZXBv
+# c2l0b3J5LzAMBgNVHRMBAf8EAjAAMIGQBggrBgEFBQcBAQSBgzCBgDA5BggrBgEF
+# BQcwAYYtaHR0cDovL29jc3AuZ2xvYmFsc2lnbi5jb20vY2EvZ3N0c2FjYXNoYTM4
+# NGc0MEMGCCsGAQUFBzAChjdodHRwOi8vc2VjdXJlLmdsb2JhbHNpZ24uY29tL2Nh
+# Y2VydC9nc3RzYWNhc2hhMzg0ZzQuY3J0MB8GA1UdIwQYMBaAFOoWxmnn48tXRTkz
+# pPBAvtDDvWWWMEEGA1UdHwQ6MDgwNqA0oDKGMGh0dHA6Ly9jcmwuZ2xvYmFsc2ln
+# bi5jb20vY2EvZ3N0c2FjYXNoYTM4NGc0LmNybDANBgkqhkiG9w0BAQwFAAOCAgEA
+# t6bHSpl2dP0gYie9iXw3Bz5XzwsvmiYisEjboyRZin+jqH26IFq7fQMIrN5VdX8K
+# Gl5pEe21b8skPfUctiroo6QS5oWESl4kzZow2iJ/qJn76TkvL+v2f4mHolGLBwyD
+# m74fXr68W63xuiYSpnbf7NYPyBaHI7zJ/ErST4bA00TC+ftPttS+G/MhNUaKg34y
+# aJ8Z6AENnPdCB8VIrt/sqd6R1k89Ojx1jL36QBEPUr2dtIIlS3Ki74CU15YTvG+X
+# xt9cwE+0Gx/qRQv8YbF+UcsdgYU4jNRZB0kTV3Bsd3lyIWmt8DT4RQj9LQ1ILOpq
+# G/Czwd9q9GJL6jSJeSq1AC4ZocVMuqcYd/D9JpIML9BQ/wk5lgJkgXEc1gRgPsDs
+# U9zz36JymN1+Yhvx0Vr67jr0Qfqk3V0z6/xVmEAJKafTeIfD9hQchjiGkyw3EKNi
+# yHyM37rdK/BsTSx0rB3MHdqE9/dHQX5NUOQCWUvhkWy10u71yzGKWnbAWQ6NNuq9
+# ftcwYFTmcyo5YbFwzfkyS+Y78+O9utqgi6VoE2NzVJbucqGLZtJFJzGJD7xe/rqU
+# LwYHeQ3HPSnNCagb6jqBeFSnXTx0GbuYuk3jA51dQNtsogVAGXCqHsh62QVAl/ga
+# dTfcRaMpIWAc3CPup3x19dDApspmRyOVzXBUtsiCWsIwggZZMIIEQaADAgECAg0B
+# 7BySQN79LkBdfEd0MA0GCSqGSIb3DQEBDAUAMEwxIDAeBgNVBAsTF0dsb2JhbFNp
+# Z24gUm9vdCBDQSAtIFI2MRMwEQYDVQQKEwpHbG9iYWxTaWduMRMwEQYDVQQDEwpH
+# bG9iYWxTaWduMB4XDTE4MDYyMDAwMDAwMFoXDTM0MTIxMDAwMDAwMFowWzELMAkG
 # A1UEBhMCQkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExMTAvBgNVBAMTKEds
-# b2JhbFNpZ24gVGltZXN0YW1waW5nIENBIC0gU0hBMzg0IC0gRzQCEAEACyAFs5QH
-# Yts+NnmUm6kwDQYJKoZIhvcNAQELBQAEggGAmtV2z/eQmAi1ImL96yVQS5Va1jO+
-# 6yf9hLr75hlPFaQpxtsHqVcFdT1ZtYVtjn/lrs7FAQ75nk4x/0XHKowJr+daQev/
-# kvK1h1ISFV7AUFO1LGVVu8EEFdgcDGO3PncoZY8KS5H11nyqCdtzYa9MD2m1yG/5
-# rqB7Dz7IZAXDZsIa7nf1NC6Fu+srGpmsVCoB2XT10oQIzAcTvbHyrUKRVoL0xAgq
-# LlRy+DudtGzvF8wZphVJG9JcLFsTyeUELSsh/aoBfYF9kgP6nZIbrDoW9ni8BJnI
-# SvrPzyh6LZdeyWd2njX2ezKn3/zt60ASG0kjr7AojnkXWQ7mhOQbhjatr4lmuwIW
-# INGovqHO9avHKLYx6pOuRKbZtKkDrD3fFY6ZZmUTipjMQLLPKVjomq8ujf9qTrri
-# FFSzdxjRl1DF6+KLZkPHGZwT95Db6oGeXFx8et7ZpZnADGsqsyRDim02eurWCwY4
-# I7id47ILxnbAGlXYcArvNCqpEc0h1bmoOhNy
+# b2JhbFNpZ24gVGltZXN0YW1waW5nIENBIC0gU0hBMzg0IC0gRzQwggIiMA0GCSqG
+# SIb3DQEBAQUAA4ICDwAwggIKAoICAQDwAuIwI/rgG+GadLOvdYNfqUdSx2E6Y3w5
+# I3ltdPwx5HQSGZb6zidiW64HiifuV6PENe2zNMeswwzrgGZt0ShKwSy7uXDycq6M
+# 95laXXauv0SofEEkjo+6xU//NkGrpy39eE5DiP6TGRfZ7jHPvIo7bmrEiPDul/bc
+# 8xigS5kcDoenJuGIyaDlmeKe9JxMP11b7Lbv0mXPRQtUPbFUUweLmW64VJmKqDGS
+# O/J6ffwOWN+BauGwbB5lgirUIceU/kKWO/ELsX9/RpgOhz16ZevRVqkuvftYPbWF
+# +lOZTVt07XJLog2CNxkM0KvqWsHvD9WZuT/0TzXxnA/TNxNS2SU07Zbv+GfqCL6P
+# SXr/kLHU9ykV1/kNXdaHQx50xHAotIB7vSqbu4ThDqxvDbm19m1W/oodCT4kDmcm
+# x/yyDaCUsLKUzHvmZ/6mWLLU2EESwVX9bpHFu7FMCEue1EIGbxsY1TbqZK7O/fUF
+# 5uJm0A4FIayxEQYjGeT7BTRE6giunUlnEYuC5a1ahqdm/TMDAd6ZJflxbumcXQJM
+# YDzPAo8B/XLukvGnEt5CEk3sqSbldwKsDlcMCdFhniaI/MiyTdtk8EWfusE/VKPY
+# dgKVbGqNyiJc9gwE4yn6S7Ac0zd0hNkdZqs0c48efXxeltY9GbCX6oxQkW2vV4Z+
+# EDcdaxoU3wIDAQABo4IBKTCCASUwDgYDVR0PAQH/BAQDAgGGMBIGA1UdEwEB/wQI
+# MAYBAf8CAQAwHQYDVR0OBBYEFOoWxmnn48tXRTkzpPBAvtDDvWWWMB8GA1UdIwQY
+# MBaAFK5sBaOTE+Ki5+LXHNbH8H/IZ1OgMD4GCCsGAQUFBwEBBDIwMDAuBggrBgEF
+# BQcwAYYiaHR0cDovL29jc3AyLmdsb2JhbHNpZ24uY29tL3Jvb3RyNjA2BgNVHR8E
+# LzAtMCugKaAnhiVodHRwOi8vY3JsLmdsb2JhbHNpZ24uY29tL3Jvb3QtcjYuY3Js
+# MEcGA1UdIARAMD4wPAYEVR0gADA0MDIGCCsGAQUFBwIBFiZodHRwczovL3d3dy5n
+# bG9iYWxzaWduLmNvbS9yZXBvc2l0b3J5LzANBgkqhkiG9w0BAQwFAAOCAgEAf+KI
+# 2VdnK0JfgacJC7rEuygYVtZMv9sbB3DG+wsJrQA6YDMfOcYWaxlASSUIHuSb99ak
+# DY8elvKGohfeQb9P4byrze7AI4zGhf5LFST5GETsH8KkrNCyz+zCVmUdvX/23oLI
+# t59h07VGSJiXAmd6FpVK22LG0LMCzDRIRVXd7OlKn14U7XIQcXZw0g+W8+o3V5SR
+# GK/cjZk4GVjCqaF+om4VJuq0+X8q5+dIZGkv0pqhcvb3JEt0Wn1yhjWzAlcfi5z8
+# u6xM3vreU0yD/RKxtklVT3WdrG9KyC5qucqIwxIwTrIIc59eodaZzul9S5YszBZr
+# GM3kWTeGCSziRdayzW6CdaXajR63Wy+ILj198fKRMAWcznt8oMWsr1EG8BHHHTDF
+# UVZg6HyVPSLj1QokUyeXgPpIiScseeI85Zse46qEgok+wEr1If5iEO0dMPz2zOpI
+# J3yLdUJ/a8vzpWuVHwRYNAqJ7YJQ5NF7qMnmvkiqK1XZjbclIA4bUaDUY6qD6mxy
+# YUrJ+kPExlfFnbY8sIuwuRwx773vFNgUQGwgHcIt6AvGjW2MtnHtUiH+Pvafnzka
+# rqzSL3ogsfSsqh3iLRSd+pZqHcY8yvPZHL9TTaRHWXyVxENB+SXiLBB+gfkNlKd9
+# 8rUJ9dhgckBQlSDUQ0S++qCV5yBZtnjGpGqqIpswggWDMIIDa6ADAgECAg5F5rsD
+# gzPDhWVI5v9FUTANBgkqhkiG9w0BAQwFADBMMSAwHgYDVQQLExdHbG9iYWxTaWdu
+# IFJvb3QgQ0EgLSBSNjETMBEGA1UEChMKR2xvYmFsU2lnbjETMBEGA1UEAxMKR2xv
+# YmFsU2lnbjAeFw0xNDEyMTAwMDAwMDBaFw0zNDEyMTAwMDAwMDBaMEwxIDAeBgNV
+# BAsTF0dsb2JhbFNpZ24gUm9vdCBDQSAtIFI2MRMwEQYDVQQKEwpHbG9iYWxTaWdu
+# MRMwEQYDVQQDEwpHbG9iYWxTaWduMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIIC
+# CgKCAgEAlQfoc8pm+ewUyns89w0I8bRFCyyCtEjG61s8roO4QZIzFKRvf+kqzMaw
+# iGvFtonRxrL/FM5RFCHsSt0bWsbWh+5NOhUG7WRmC5KAykTec5RO86eJf094YwjI
+# ElBtQmYvTbl5KE1SGooagLcZgQ5+xIq8ZEwhHENo1z08isWyZtWQmrcxBsW+4m0y
+# BqYe+bnrqqO4v76CY1DQ8BiJ3+QPefXqoh8q0nAue+e8k7ttU+JIfIwQBzj/ZrJ3
+# YX7g6ow8qrSk9vOVShIHbf2MsonP0KBhd8hYdLDUIzr3XTrKotudCd5dRC2Q8YHN
+# V5L6frxQBGM032uTGL5rNrI55KwkNrfw77YcE1eTtt6y+OKFt3OiuDWqRfLgnTah
+# b1SK8XJWbi6IxVFCRBWU7qPFOJabTk5aC0fzBjZJdzC8cTflpuwhCHX85mEWP3fV
+# 2ZGXhAps1AJNdMAU7f05+4PyXhShBLAL6f7uj+FuC7IIs2FmCWqxBjplllnA8DX9
+# ydoojRoRh3CBCqiadR2eOoYFAJ7bgNYl+dwFnidZTHY5W+r5paHYgw/R/98wEfmF
+# zzNI9cptZBQselhP00sIScWVZBpjDnk99bOMylitnEJFeW4OhxlcVLFltr+Mm9wT
+# 6Q1vuC7cZ27JixG1hBSKABlwg3mRl5HUGie/Nx4yB9gUYzwoTK8CAwEAAaNjMGEw
+# DgYDVR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFK5sBaOT
+# E+Ki5+LXHNbH8H/IZ1OgMB8GA1UdIwQYMBaAFK5sBaOTE+Ki5+LXHNbH8H/IZ1Og
+# MA0GCSqGSIb3DQEBDAUAA4ICAQCDJe3o0f2VUs2ewASgkWnmXNCE3tytok/oR3jW
+# ZZipW6g8h3wCitFutxZz5l/AVJjVdL7BzeIRka0jGD3d4XJElrSVXsB7jpl4FkMT
+# VlezorM7tXfcQHKso+ubNT6xCCGh58RDN3kyvrXnnCxMvEMpmY4w06wh4OMd+tgH
+# M3ZUACIquU0gLnBo2uVT/INc053y/0QMRGby0uO9RgAabQK6JV2NoTFR3VRGHE3b
+# mZbvGhwEXKYV73jgef5d2z6qTFX9mhWpb+Gm+99wMOnD7kJG7cKTBYn6fWN7P9Bx
+# gXwA6JiuDng0wyX7rwqfIGvdOxOPEoziQRpIenOgd2nHtlx/gsge/lgbKCuobK1e
+# bcAF0nu364D+JTf+AptorEJdw+71zNzwUHXSNmmc5nsE324GabbeCglIWYfrexRg
+# emSqaUPvkcdM7BjdbO9TLYyZ4V7ycj7PVMi9Z+ykD0xF/9O5MCMHTI8Qv4aW2Zla
+# tJlXHKTMuxWJU7osBQ/kxJ4ZsRg01Uyduu33H68klQR4qAO77oHl2l98i0qhkHQl
+# p7M+S8gsVr3HyO844lyS8Hn3nIS6dC1hASB+ftHyTwdZX4stQ1LrRgyU4fVmR3l3
+# 1VRbH60kN8tFWk6gREjI2LCZxRWECfbWSUnAZbjmGnFuoKjxguhFPmzWAtcKZ4MF
+# WsmkEDGCA0kwggNFAgEBMG8wWzELMAkGA1UEBhMCQkUxGTAXBgNVBAoTEEdsb2Jh
+# bFNpZ24gbnYtc2ExMTAvBgNVBAMTKEdsb2JhbFNpZ24gVGltZXN0YW1waW5nIENB
+# IC0gU0hBMzg0IC0gRzQCEAEACyAFs5QHYts+NnmUm6kwCwYJYIZIAWUDBAIBoIIB
+# LTAaBgkqhkiG9w0BCQMxDQYLKoZIhvcNAQkQAQQwKwYJKoZIhvcNAQk0MR4wHDAL
+# BglghkgBZQMEAgGhDQYJKoZIhvcNAQELBQAwLwYJKoZIhvcNAQkEMSIEINz3CFMD
+# VSxopNa1T5o7A3RMM+9h9Bc3FQFKnuOglmXEMIGwBgsqhkiG9w0BCRACLzGBoDCB
+# nTCBmjCBlwQgcl7yf0jhbmm5Y9hCaIxbygeojGkXBkLI/1ord69gXP0wczBfpF0w
+# WzELMAkGA1UEBhMCQkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExMTAvBgNV
+# BAMTKEdsb2JhbFNpZ24gVGltZXN0YW1waW5nIENBIC0gU0hBMzg0IC0gRzQCEAEA
+# CyAFs5QHYts+NnmUm6kwDQYJKoZIhvcNAQELBQAEggGAMvB+UidJDJuOL1X9Blsy
+# EhZTn3sTM/4H00dWab0EksclNNn9WZRgBbBqNVzctVhKTHGMqNnp5pO5hP0KZXwM
+# 6tKscyYXBHcRnz3Ji7ytuSRl1IQdZ64sz0C64sJcy3z4bPWzzZsk8rKBkomkWr5Z
+# x+jLZCFyU2HjCT2SM/KWOBmQxYcbxKKjR7Yj/sLJmBdCc4LhfJAwrbz81BxZb/Jr
+# /InpK/2qkwdPKT2AUxdxAUNLah5PLMLjzawdHwrY21/fxCKQ+DVkLvmgWNVsekia
+# wJ6l5t7pLlDhdoFXk6yo9hqga4Pc0vpim6qff47N5QTvRtF6O9vmZT1cUETZV9wH
+# nANCf3AUyeS3ZRWfbEZURP9eDDXUuYfBHD/cCBWcV9CNqZFG3158b/TG2Xct9ZiL
+# HvM0AGtHi+F6c4w/sFirZlGXBvmawm0U8oqP6xms/fJ/b9VEpZdpOJgts/izPtUO
+# kSTNm2EUj5qSxn4x8MySat4MtAmmky2xW7ufugKe9ZnW
 # SIG # End signature block
